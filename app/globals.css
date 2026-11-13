@@ -11,7 +11,8 @@ body {
 }
 
 canvas {
-  image-rendering: pixelated;
+  /* Smooth scaling: the game is 3-D and the HUD uses a smooth font now. */
+  image-rendering: auto;
 }
 
 input[type="range"] {

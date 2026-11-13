@@ -21,10 +21,11 @@ export interface GiftDrop {
 }
 
 /** What a gift (or the like goal) does in the box. */
-export type ActionKind = "tnt" | "clear" | "fill" | "win";
+export type ActionKind = "tnt" | "dragon" | "clear" | "fill" | "win";
 
 export const ACTION_NAMES: Record<ActionKind, string> = {
   tnt: "Drop TNT",
+  dragon: "Dragon (burns the top layer)",
   clear: "Empty the box",
   fill: "Fill the box",
   win: "Add wins",
@@ -38,18 +39,23 @@ export interface GiftAction {
   /** Text shown on stream next to the gift picture. */
   label: string;
   action: ActionKind;
-  /** TNT per gift for "tnt", wins per gift for "win"; ignored otherwise. */
+  /** TNT per gift for "tnt", wins per gift for "win", dragons per gift for "dragon"; ignored otherwise. */
   amount: number;
   /** Optional picture; otherwise the picture TikFinity sends with the gift is remembered. */
   imageUrl?: string;
 }
 
+/**
+ * The six gifts on stream. Gift names must match TikTok's exactly (any case);
+ * change them in the control panel (H) if a gift doesn't trigger.
+ */
 export const DEFAULT_GIFT_ACTIONS: GiftAction[] = [
   { id: "g1", giftName: "Rose", label: "TNT", action: "tnt", amount: 1 },
-  { id: "g2", giftName: "Finger Heart", label: "TNT Rain", action: "tnt", amount: 15 },
-  { id: "g3", giftName: "Doughnut", label: "Empty Box", action: "clear", amount: 1 },
-  { id: "g4", giftName: "Perfume", label: "Fill Box", action: "fill", amount: 1 },
-  { id: "g5", giftName: "Galaxy", label: "Plus 1 Win", action: "win", amount: 1 },
+  { id: "g2", giftName: "Rosa", label: "TNT Rain", action: "tnt", amount: 15 },
+  { id: "g3", giftName: "Finger Heart", label: "Dragon", action: "dragon", amount: 1 },
+  { id: "g4", giftName: "Perfume", label: "Empty Box", action: "clear", amount: 1 },
+  { id: "g5", giftName: "Doughnut", label: "Fill Box", action: "fill", amount: 1 },
+  { id: "g6", giftName: "Galaxy", label: "Plus 1 Win", action: "win", amount: 1 },
 ];
 
 export interface GameSettings {

@@ -38,7 +38,15 @@ const SIM_GIFTS = {
 function loadSettings(): GameSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<GameSettings>) };
+    if (raw) {
+      const saved = { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<GameSettings>) };
+      // Upgrade the old untouched 5-gift default list to the 6-gift one (adds DRAGON).
+      const ids = saved.giftActions.map((g) => g.id).join(",");
+      if (ids === "g1,g2,g3,g4,g5" && !saved.giftActions.some((g) => g.action === "dragon")) {
+        saved.giftActions = DEFAULT_SETTINGS.giftActions;
+      }
+      return saved;
+    }
   } catch {
     /* storage unavailable */
   }

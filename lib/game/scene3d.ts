@@ -2,7 +2,8 @@ import * as THREE from "three";
 import { BLAST_RADIUS, BORDER, BOX_H, BOX_W, BOX_X, BOX_Y, CELL, COLS, H, MAX_PARTICLES, ROWS, TNT_SIZE, W } from "./constants";
 import type { TextureName, TextureSet } from "./textures";
 import type { BlockType } from "./types";
-import type { Builder, Cell, Particle, Ring, Tnt } from "./engine";
+import type { Builder, Cell, Dragon, Particle, Ring, Tnt } from "./engine";
+import { buildDragon, type DragonRig } from "./dragon";
 import { buildCharacter, CHARACTER_SCALE, type CharacterKind, type CharacterRig } from "./characters";
 import { Landscape } from "./landscape";
 
@@ -57,6 +58,7 @@ export interface SceneView {
   scroll: number;
   /** Camera pan in game pixels (screen x = game x + scrollX). */
   scrollX: number;
+  dragon: Dragon | null;
 }
 
 function pixelTexture(src: HTMLCanvasElement, repeatX = 1, repeatY = 1): THREE.Texture {
@@ -209,6 +211,7 @@ export class Scene3D {
   private rig: BuilderRig;
   /** 3-D scenery drawn behind the tower with its own camera. */
   private landscape = new Landscape();
+  private dragonRig: DragonRig;
   private characterKind: CharacterKind = "penguin";
   private debris: THREE.InstancedMesh;
   private smoke = new PointBatch(MAX_PARTICLES, SOFT_FRAG, false);
@@ -251,6 +254,9 @@ export class Scene3D {
 
     this.rig = buildCharacter(this.characterKind);
     this.world.add(this.rig.root);
+    this.dragonRig = buildDragon();
+    this.dragonRig.root.visible = false;
+    this.world.add(this.dragonRig.root);
 
     const debrisMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
     this.debris = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), debrisMat, MAX_DEBRIS);
@@ -433,6 +439,7 @@ export class Scene3D {
     this.syncBlocks(view.grid);
     this.syncTnts(view.tnts);
     this.syncBuilder(view.builder, t);
+    this.syncDragon(view.dragon, t);
     this.syncParticles(view.particles);
     this.syncRings(view.rings);
 
@@ -526,6 +533,19 @@ export class Scene3D {
 
     rig.stars.visible = b.stun > 0 && !b.flung;
     rig.stars.rotation.y = time * 6;
+  }
+
+  private syncDragon(d: Dragon | null, time: number) {
+    const r = this.dragonRig;
+    r.root.visible = !!d;
+    if (!d) return;
+    r.root.position.set(gx(d.x), gy(d.y), CZ + 0.6);
+    r.root.rotation.set(0, d.dir > 0 ? -0.35 : Math.PI + 0.35, Math.sin(time * 4) * 0.06);
+    const flap = Math.sin(time * 10);
+    r.wingL.rotation.x = flap * 0.7;
+    r.wingR.rotation.x = -flap * 0.7;
+    r.jaw.rotation.z = -0.25 - Math.abs(Math.sin(time * 12)) * 0.2;
+    r.tail.rotation.y = Math.sin(time * 5) * 0.3;
   }
 
   private parsed(hex: string, raw: boolean): THREE.Color {

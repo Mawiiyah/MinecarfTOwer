@@ -120,6 +120,16 @@ export interface Particle {
   vr: number;
 }
 
+/** A DRAGON gift in flight (game pixels, centre of its body). */
+export interface Dragon {
+  x: number;
+  y: number;
+  dir: 1 | -1;
+  t: number;
+  lastCol: number;
+  viewer: Viewer;
+}
+
 export interface Ring {
   x: number;
   y: number;
@@ -138,7 +148,13 @@ const USE_BG_IMAGE = false;
 /** Where the grass line sits in background.png (fraction of its height), and the game y it lines up with. */
 const BG_GROUND_FRAC = 0.75;
 const BG_GROUND_Y = BOX_Y + BOX_H; // the box floor
-const FONT = '"Press Start 2P", "Courier New", monospace';
+/** Chunky rounded display font for the HUD (loaded in app/layout.tsx); falls back to a heavy system font. */
+const FONT = '"Lilita One", "Arial Black", system-ui, sans-serif';
+/** Accent colours for the gift-action chips. */
+const ACTION_COLORS: Record<ActionKind, string> = { tnt: "#ef4444", dragon: "#8b5cf6", clear: "#f97316", fill: "#14b8a6", win: "#eab308" };
+/** Dragon flight speed (px/s) and how far outside the box it starts/ends. */
+const DRAGON_SPEED = 520;
+const DRAGON_MARGIN = 260;
 const TOAST_LIFE = 3.2;
 /**
  * Final-seconds slow motion for the HOLD timer: from SLOW_FROM seconds left the
@@ -259,6 +275,9 @@ export class TntBoxEngine {
   /** Gift name (lower case) → picture URL, remembered from incoming gifts for the on-screen list. */
   private giftImages = new Map<string, string>();
   private banner: { title: string; sub: string; color: string; age: number } | null = null;
+  /** The dragon currently flying across (DRAGON gift), and how many more are waiting. */
+  private dragon: Dragon | null = null;
+  private dragonQueue: Viewer[] = [];
   private nextId = 1;
   /** Last whole second shown by the HOLD timer (for the countdown tick). */
   private lastShownSecond = 0;
@@ -423,6 +442,12 @@ export class TntBoxEngine {
         this.toast(`${who}: ${label}${times} → ${tnt} TNT`, "#ff8a65");
         break;
       }
+      case "dragon": {
+        const count = Math.max(1, Math.floor(amount)) * n;
+        for (let i = 0; i < Math.min(count, 10); i++) this.dragonQueue.push(viewer);
+        this.toast(`${who}: ${label}${times}!`, "#c4b5fd");
+        break;
+      }
       case "clear":
         this.clearBox(viewer);
         this.toast(`${who}: ${label}!`, "#ff5c5c");
@@ -555,6 +580,8 @@ export class TntBoxEngine {
   }
 
   resetRound() {
+    this.dragon = null;
+    this.dragonQueue = [];
     this.grid.fill(null);
     this.filled = 0;
     this.tnts = [];
@@ -915,6 +942,7 @@ export class TntBoxEngine {
       if (this.spawnQueue.length === 0 && this.spawnCooldown < 0) this.spawnCooldown = 0;
 
       this.updateTnts(dt);
+      this.updateDragon(dt);
     }
 
     this.updateScroll(dt);
@@ -946,6 +974,100 @@ export class TntBoxEngine {
     this.scroll += (target - this.scroll) * (1 - Math.exp(-dt * 2.5));
     const targetX = Math.min(0, Math.max(MIN_SCROLL_X, SCROLL_X_ANCHOR - b.x));
     this.scrollX += (targetX - this.scrollX) * (1 - Math.exp(-dt * 2.5));
+  }
+
+  /**
+   * DRAGON: flies across the box just above the tallest stack, burning the top
+   * block of every column it passes (and flinging the builder if it's in the way).
+   */
+  private updateDragon(dt: number) {
+    if (!this.dragon) {
+      const viewer = this.dragonQueue.shift();
+      if (!viewer) return;
+      let top = BOX_Y + BOX_H;
+      for (let col = 0; col < COLS; col++) top = Math.min(top, this.surfaceY(col));
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      this.dragon = {
+        x: dir > 0 ? BOX_X - DRAGON_MARGIN : BOX_X + BOX_W + DRAGON_MARGIN,
+        y: Math.max(BOX_Y + CELL, top) - CELL * 0.9,
+        dir,
+        t: 0,
+        lastCol: -1,
+        viewer,
+      };
+      this.audio.fanfare();
+    }
+    const d = this.dragon;
+    d.t += dt;
+    d.x += d.dir * DRAGON_SPEED * dt;
+    d.y += Math.sin(d.t * 4) * 18 * dt; // gentle bob
+
+    // Fire breath
+    for (let i = 0; i < 3; i++) {
+      this.addParticle({
+        kind: i === 0 ? "smoke" : "spark",
+        x: d.x + d.dir * CELL * 1.4,
+        y: d.y + CELL * 0.5,
+        vx: d.dir * (200 + Math.random() * 200),
+        vy: 300 + Math.random() * 300,
+        life: 0.45,
+        maxLife: 0.45,
+        size: i === 0 ? 34 : 10,
+        color: Math.random() < 0.5 ? "#ffb347" : "#ff5a2b",
+        gravity: 200,
+        rot: 0,
+        vr: 0,
+      });
+    }
+
+    // Burn the top block of each column as it passes overhead.
+    if (d.x >= BOX_X && d.x < BOX_X + BOX_W) {
+      const col = this.colAt(d.x);
+      if (col !== d.lastCol) {
+        d.lastCol = col;
+        const h = this.height(col);
+        if (h > 0) {
+          const row = ROWS - h;
+          const cell = this.grid[row * COLS + col];
+          this.grid[row * COLS + col] = null;
+          this.filled--;
+          this.entryFor(d.viewer).blocks++;
+          const bx = BOX_X + col * CELL + CELL / 2;
+          const by = BOX_Y + row * CELL + CELL / 2;
+          const colors = cell ? BLOCK_PARTICLE_COLORS[cell.type] : ["#ffb347"];
+          for (let i = 0; i < 6; i++) {
+            this.addParticle({
+              kind: "debris",
+              x: bx + (Math.random() - 0.5) * CELL * 0.7,
+              y: by + (Math.random() - 0.5) * CELL * 0.7,
+              z: -CELL * 0.5,
+              vx: (Math.random() - 0.5) * 600,
+              vy: -300 - Math.random() * 500,
+              vz: Math.random() * 600,
+              life: 1,
+              maxLife: 1.3,
+              size: 14,
+              color: colors[Math.floor(Math.random() * colors.length)],
+              gravity: 2400,
+              rot: Math.random() * 6,
+              vr: (Math.random() - 0.5) * 14,
+            });
+          }
+          this.audio.explosion(0.35);
+          const b = this.builder;
+          if (!b.flung && b.col === col) {
+            b.flung = true;
+            b.vx = d.dir * 420;
+            b.vy = -800;
+            b.stun = 1.2;
+            b.step = 1;
+            b.fromCol = b.col;
+          }
+        }
+      }
+    }
+    const out = d.dir > 0 ? d.x > BOX_X + BOX_W + DRAGON_MARGIN : d.x < BOX_X - DRAGON_MARGIN;
+    if (out) this.dragon = null;
   }
 
   /** Real-time speed of the HOLD countdown (1 = normal), slowing over the last seconds. */
@@ -1324,6 +1446,7 @@ export class TntBoxEngine {
       glow: this.isFull() && this.phase === "playing" ? 0.14 + 0.12 * Math.sin(this.time * 6) : 0,
       scroll: this.scroll,
       scrollX: this.scrollX,
+      dragon: this.dragon,
     });
 
     c.setTransform(1, 0, 0, 1, 0, 0);
@@ -1354,9 +1477,13 @@ export class TntBoxEngine {
     c.textBaseline = "middle";
     c.lineJoin = "round";
     if (stroke > 0) {
+      c.save();
+      c.shadowColor = "rgba(0,0,0,0.45)";
+      c.shadowOffsetY = Math.max(2, size / 18);
       c.lineWidth = stroke;
-      c.strokeStyle = "#000";
+      c.strokeStyle = "#0b1020";
       c.strokeText(s, x, y);
+      c.restore();
     }
     c.fillStyle = color;
     c.fillText(s, x, y);
@@ -1404,7 +1531,7 @@ export class TntBoxEngine {
       const name = truncate(t.viewer.nickname, 12);
       s3.toScreen(t.x, t.y - TNT_SIZE / 2 - 50, front, pt);
       const y = pt.y;
-      c.font = `18px ${FONT}`;
+      c.font = `22px ${FONT}`;
       const tw = c.measureText(name).width;
       const w = tw + 58;
       const x0 = pt.x - w / 2;
@@ -1413,7 +1540,7 @@ export class TntBoxEngine {
       c.roundRect(x0, y - 20, w, 40, 20);
       c.fill();
       this.drawAvatar(t.viewer.avatarUrl, t.viewer.nickname, x0 + 20, y, 16);
-      this.text(name, x0 + 44, y + 1, 18, "#fff", "left", 0);
+      this.text(name, x0 + 44, y + 1, 22, "#fff", "left", 0);
     }
   }
 
@@ -1446,96 +1573,305 @@ export class TntBoxEngine {
     return (this.canvas?.height ?? H) - this.offY;
   }
 
-  /** Left-aligned run of differently coloured text pieces on one line. */
-  private textRun(parts: [string, string][], x: number, y: number, size: number, stroke: number) {
+  // ───────────────────────────── UI kit ─────────────────────────────
+
+  /** Glassy dark card with a coloured rim, soft drop shadow and a sheen on its top half. */
+  private panel(x: number, y: number, w: number, h: number, r: number, accent = "#e9b949") {
     const c = this.ctx!;
-    c.font = `${size}px ${FONT}`;
-    let cx = x;
-    for (const [str, color] of parts) {
-      this.text(str, cx, y, size, color, "left", stroke);
-      cx += c.measureText(str).width;
+    c.save();
+    c.shadowColor = "rgba(0,0,0,0.45)";
+    c.shadowBlur = 18;
+    c.shadowOffsetY = 6;
+    const g = c.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0, "rgba(32,44,72,0.9)");
+    g.addColorStop(1, "rgba(12,18,34,0.9)");
+    c.fillStyle = g;
+    c.beginPath();
+    c.roundRect(x, y, w, h, r);
+    c.fill();
+    c.restore();
+    const sheen = c.createLinearGradient(0, y, 0, y + h * 0.5);
+    sheen.addColorStop(0, "rgba(255,255,255,0.13)");
+    sheen.addColorStop(1, "rgba(255,255,255,0)");
+    c.fillStyle = sheen;
+    c.beginPath();
+    c.roundRect(x + 3, y + 3, w - 6, h * 0.5, [r - 3, r - 3, 0, 0]);
+    c.fill();
+    c.lineWidth = 3;
+    c.strokeStyle = accent;
+    c.globalAlpha = 0.85;
+    c.beginPath();
+    c.roundRect(x + 1.5, y + 1.5, w - 3, h - 3, r - 1);
+    c.stroke();
+    c.globalAlpha = 1;
+  }
+
+  /** Rounded progress bar with a gradient fill and a highlight stripe. */
+  private bar(x: number, y: number, w: number, h: number, frac: number, from: string, to: string) {
+    const c = this.ctx!;
+    c.fillStyle = "rgba(0,0,0,0.45)";
+    c.beginPath();
+    c.roundRect(x, y, w, h, h / 2);
+    c.fill();
+    const f = Math.max(0, Math.min(1, frac));
+    if (f > 0) {
+      const fw = Math.max(h, w * f);
+      const g = c.createLinearGradient(x, 0, x + fw, 0);
+      g.addColorStop(0, from);
+      g.addColorStop(1, to);
+      c.fillStyle = g;
+      c.beginPath();
+      c.roundRect(x, y, fw, h, h / 2);
+      c.fill();
+      c.fillStyle = "rgba(255,255,255,0.35)";
+      c.beginPath();
+      c.roundRect(x + h / 3, y + 2, Math.max(0, fw - (h * 2) / 3), Math.max(2, h * 0.28), h / 4);
+      c.fill();
     }
   }
 
+  /** Round badge that holds an icon. */
+  private iconBadge(cx: number, cy: number, r: number, ring: string, draw: (s: number) => void) {
+    const c = this.ctx!;
+    const g = c.createRadialGradient(cx, cy - r * 0.4, r * 0.2, cx, cy, r);
+    g.addColorStop(0, "rgba(255,255,255,0.18)");
+    g.addColorStop(1, "rgba(0,0,0,0.35)");
+    c.fillStyle = g;
+    c.beginPath();
+    c.arc(cx, cy, r, 0, Math.PI * 2);
+    c.fill();
+    c.lineWidth = 3;
+    c.strokeStyle = ring;
+    c.stroke();
+    c.save();
+    c.translate(cx, cy);
+    draw(r * 0.62);
+    c.restore();
+  }
+
+  /** Gold cup, drawn around (0,0) with half-size s. */
+  private trophy(s: number) {
+    const c = this.ctx!;
+    const gold = c.createLinearGradient(-s, -s, s, s);
+    gold.addColorStop(0, "#fff1a8");
+    gold.addColorStop(0.5, "#f5c542");
+    gold.addColorStop(1, "#c98a12");
+    c.fillStyle = gold;
+    c.strokeStyle = gold;
+    c.lineWidth = s * 0.18;
+    c.beginPath(); // handles
+    c.arc(-s * 0.62, -s * 0.35, s * 0.32, Math.PI * 0.5, Math.PI * 1.5);
+    c.moveTo(s * 0.62, -s * 0.67);
+    c.arc(s * 0.62, -s * 0.35, s * 0.32, -Math.PI * 0.5, Math.PI * 0.5);
+    c.stroke();
+    c.beginPath(); // bowl
+    c.moveTo(-s * 0.62, -s * 0.8);
+    c.lineTo(s * 0.62, -s * 0.8);
+    c.quadraticCurveTo(s * 0.6, s * 0.15, 0, s * 0.25);
+    c.quadraticCurveTo(-s * 0.6, s * 0.15, -s * 0.62, -s * 0.8);
+    c.fill();
+    c.fillRect(-s * 0.1, s * 0.2, s * 0.2, s * 0.4); // stem
+    c.beginPath(); // base
+    c.roundRect(-s * 0.45, s * 0.55, s * 0.9, s * 0.28, s * 0.08);
+    c.fill();
+    c.fillStyle = "rgba(255,255,255,0.55)";
+    c.fillRect(-s * 0.42, -s * 0.7, s * 0.14, s * 0.55);
+  }
+
+  private heart(s: number) {
+    const c = this.ctx!;
+    const g = c.createLinearGradient(0, -s, 0, s);
+    g.addColorStop(0, "#ff9ec7");
+    g.addColorStop(1, "#e2286f");
+    c.fillStyle = g;
+    c.beginPath();
+    c.moveTo(0, s * 0.85);
+    c.bezierCurveTo(-s * 1.2, -s * 0.05, -s * 0.75, -s * 1.05, 0, -s * 0.45);
+    c.bezierCurveTo(s * 0.75, -s * 1.05, s * 1.2, -s * 0.05, 0, s * 0.85);
+    c.fill();
+    c.fillStyle = "rgba(255,255,255,0.6)";
+    c.beginPath();
+    c.ellipse(-s * 0.42, -s * 0.38, s * 0.16, s * 0.24, -0.6, 0, Math.PI * 2);
+    c.fill();
+  }
+
+  /** Little isometric aqua block. */
+  private blockIcon(s: number) {
+    const c = this.ctx!;
+    const top = [
+      [0, -s],
+      [s * 0.9, -s * 0.5],
+      [0, 0],
+      [-s * 0.9, -s * 0.5],
+    ];
+    const face = (pts: number[][], col: string) => {
+      c.fillStyle = col;
+      c.beginPath();
+      pts.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
+      c.closePath();
+      c.fill();
+    };
+    face(top, "#b9fbfb");
+    face([[-s * 0.9, -s * 0.5], [0, 0], [0, s], [-s * 0.9, s * 0.5]], "#5fd6dc");
+    face([[s * 0.9, -s * 0.5], [0, 0], [0, s], [s * 0.9, s * 0.5]], "#36aeb8");
+    c.strokeStyle = "rgba(255,255,255,0.7)";
+    c.lineWidth = 2;
+    c.beginPath();
+    c.moveTo(-s * 0.45, s * 0.55);
+    c.lineTo(-s * 0.15, -s * 0.05);
+    c.stroke();
+  }
+
+  /** True when the window is wide enough to put the blocks banner top-centre. */
+  private wideView() {
+    return this.viewRight() - this.viewLeft() >= 1500;
+  }
+
+  // ───────────────────────────── HUD ─────────────────────────────
+
   /**
-   * Top-left: "WIN x / goal" and the like goal. Above the box: blocks filled.
-   * The round timer only shows while the box is full (that's when it runs).
+   * Cards: wins (top-left), like goal (under it) and the blocks counter (top-centre
+   * on wide screens, under the like goal on a 9:16 source). The HOLD ring only
+   * shows while the box is full, because that's when the timer runs.
    */
   private drawHud(c: CanvasRenderingContext2D) {
     const s = this.settings;
     const L = this.viewLeft();
-    this.text(`WIN ${this.streamerWins} / ${s.winGoal}`, L + 30, 66, 52, "#ffffff", "left", 14);
+    const cardW = 400;
+
+    // Wins
+    let y = 20;
+    this.panel(L + 20, y, cardW, 116, 26);
+    this.iconBadge(L + 76, y + 58, 38, "#f5c542", (k) => this.trophy(k));
+    this.text("WINS", L + 132, y + 30, 26, "#ffd76a", "left", 6);
+    this.text(`${this.streamerWins} / ${s.winGoal}`, L + 132, y + 66, 48, "#ffffff", "left", 9);
+    this.bar(L + 132, y + 94, cardW - 156, 12, this.streamerWins / Math.max(1, s.winGoal), "#f5c542", "#fff1a8");
+    y += 132;
+
+    // Like goal
     if (s.likeGoalStep > 0) {
-      const target = (Math.floor(this.likes / s.likeGoalStep) + 1) * s.likeGoalStep;
-      const label = s.likeGoalLabel.trim();
-      this.textRun(
-        [
-          [label ? `${label.toUpperCase()} - ` : "", "#ffffff"],
-          [String(this.likes), "#7dff6a"],
-          [" / ", "#ffffff"],
-          [String(target), "#7dff6a"],
-          [" LIKES", "#ffffff"],
-        ],
-        L + 34,
-        128,
-        20,
-        7,
-      );
+      const step = s.likeGoalStep;
+      const target = (Math.floor(this.likes / step) + 1) * step;
+      const label = (s.likeGoalLabel.trim() || "Like goal").toUpperCase();
+      this.panel(L + 20, y, cardW, 116, 26, "#ff6fa8");
+      this.iconBadge(L + 76, y + 58, 38, "#ff6fa8", (k) => this.heart(k));
+      this.text(truncate(label, 16), L + 132, y + 30, 26, "#ff9ec7", "left", 6);
+      this.text(`${this.likes.toLocaleString()} / ${target.toLocaleString()}`, L + 132, y + 66, 40, "#ffffff", "left", 8);
+      this.bar(L + 132, y + 94, cardW - 156, 12, (this.likes % step) / step, "#4ade80", "#bef264");
+      y += 132;
     }
 
-    // Blocks counter, under the like goal (clear of the builder walking on top).
+    // Blocks counter
     const full = this.isFull() && this.phase === "playing";
-    const counter = `${this.filled} / ${COLS * ROWS}`;
-    // Sits just above the tower's top as it comes into view, never higher than under the like goal.
-    // Floats above the builder's head (~1.6 blocks tall) once the tower top is on screen.
-    const counterY = Math.max(196, BOX_Y + this.scroll - CELL * 2.9);
-    const counterX = Math.max(L + 30, BOX_X + this.scrollX + 40);
-    this.text(counter, counterX, counterY, 40, full ? "#7dff6a" : "#ffd84a", "left", 10);
+    const total = COLS * ROWS;
+    const bw = 400;
+    const bx = this.wideView() ? W / 2 - bw / 2 : L + 20;
+    const by = this.wideView() ? 20 : y;
+    this.panel(bx, by, bw, 96, 26, full ? "#4ade80" : "#5fd6dc");
+    this.iconBadge(bx + 54, by + 48, 32, full ? "#4ade80" : "#5fd6dc", (k) => this.blockIcon(k));
+    this.text(full ? "BOX FULL!" : "BLOCKS", bx + 102, by + 28, 24, full ? "#86efac" : "#a5f3fc", "left", 6);
+    this.text(`${this.filled} / ${total}`, bx + 102, by + 60, 38, "#ffffff", "left", 8);
+    this.bar(bx + 102, by + 80, bw - 126, 8, this.filled / total, full ? "#22c55e" : "#22d3ee", full ? "#bbf7d0" : "#a5f3fc");
 
-    if (full) {
-      const urgent = this.timeLeft <= 10;
-      const final = this.timeLeft <= SLOW_FROM;
-      // Each second "beats": big right as it appears, settling as it slowly runs out.
-      const beat = Math.pow(this.timeLeft % 1, 3);
-      const pop = final ? 1 + 0.45 * beat : urgent ? 1 + 0.18 * beat : 1;
-      c.save();
-      c.translate(W * 0.6, final ? 560 : 600);
-      c.scale(pop, pop);
-      if (final) this.text(String(Math.max(1, Math.ceil(this.timeLeft))), 0, 0, 150, "#ff4d4d", "center", 22);
-      else this.text(`HOLD ${formatTime(this.timeLeft)}`, 0, 0, 56, urgent ? "#ff4d4d" : "#ffffff", "center", 14);
-      c.restore();
-    }
+    if (full) this.drawHoldRing(c);
   }
 
-  /** Right side: gift picture + what it does, on a dark see-through panel. */
+  /** Circular countdown in the middle while the box is full; the last seconds get big and red. */
+  private drawHoldRing(c: CanvasRenderingContext2D) {
+    const urgent = this.timeLeft <= 10;
+    const final = this.timeLeft <= SLOW_FROM;
+    const beat = Math.pow(this.timeLeft % 1, 3);
+    const pop = final ? 1 + 0.4 * beat : urgent ? 1 + 0.12 * beat : 1;
+    const R = 112;
+    const frac = Math.max(0, this.timeLeft / Math.max(1, this.settings.timerDuration));
+    const col = urgent ? "#ff4d4d" : "#4ade80";
+    c.save();
+    c.translate(W * 0.6, 600);
+    c.scale(pop, pop);
+    c.fillStyle = "rgba(10,15,30,0.6)";
+    c.beginPath();
+    c.arc(0, 0, R, 0, Math.PI * 2);
+    c.fill();
+    c.lineWidth = 16;
+    c.strokeStyle = "rgba(255,255,255,0.15)";
+    c.beginPath();
+    c.arc(0, 0, R - 10, 0, Math.PI * 2);
+    c.stroke();
+    c.strokeStyle = col;
+    c.lineCap = "round";
+    c.shadowColor = col;
+    c.shadowBlur = 20;
+    c.beginPath();
+    c.arc(0, 0, R - 10, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac);
+    c.stroke();
+    c.shadowBlur = 0;
+    c.lineCap = "butt";
+    if (final) {
+      this.text(String(Math.max(1, Math.ceil(this.timeLeft))), 0, 6, 130, "#ff4d4d", "center", 14);
+    } else {
+      this.text("HOLD", 0, -40, 28, "#e2e8f0", "center", 6);
+      this.text(formatTime(this.timeLeft), 0, 14, 64, urgent ? "#ff6b6b" : "#ffffff", "center", 10);
+    }
+    c.restore();
+  }
+
+  /** Right side: header, then each gift's picture slot, its label and a coloured action chip. */
   private drawGiftList(c: CanvasRenderingContext2D) {
     const list = this.settings.giftActions;
     if (!list.length) return;
-    const rowH = 66;
-    const w = 330;
-    const x0 = this.viewRight() - w - 18;
-    const y0 = 168;
-    const h = list.length * rowH + 20;
-    c.fillStyle = "rgba(20,24,32,0.55)";
-    c.beginPath();
-    c.roundRect(x0, y0, w, h, 22);
-    c.fill();
+    const rowH = 70;
+    const w = 380;
+    const x0 = this.viewRight() - w - 20;
+    const y0 = 20;
+    const head = 54;
+    const h = head + list.length * rowH + 14;
+    this.panel(x0, y0, w, h, 26);
+    this.text("🎁", x0 + 30, y0 + 30, 26, "#fff", "center", 0);
+    this.text("SEND A GIFT", x0 + 54, y0 + 30, 26, "#ffd76a", "left", 6);
+    c.fillStyle = "rgba(255,255,255,0.12)";
+    c.fillRect(x0 + 18, y0 + head, w - 36, 2);
+
     list.forEach((g, i) => {
-      const cy = y0 + 10 + i * rowH + rowH / 2;
+      const cy = y0 + head + 8 + i * rowH + rowH / 2;
+      // Picture slot
+      const sx = x0 + 18;
+      c.fillStyle = "rgba(255,255,255,0.08)";
+      c.beginPath();
+      c.roundRect(sx, cy - 28, 56, 56, 14);
+      c.fill();
       const url = g.imageUrl || this.giftImages.get(g.giftName.trim().toLowerCase());
       const img = this.avatars.get(url);
-      const ix = x0 + 22;
       if (img) {
         c.imageSmoothingEnabled = true;
-        c.drawImage(img, ix, cy - 26, 52, 52);
-        c.imageSmoothingEnabled = false;
+        c.drawImage(img, sx + 4, cy - 24, 48, 48);
       } else {
-        c.font = "40px system-ui, sans-serif";
-        c.textAlign = "left";
+        c.font = "34px system-ui, sans-serif";
+        c.fillStyle = "#ffffff"; // emoji ignore the colour but not its alpha
+        c.textAlign = "center";
         c.textBaseline = "middle";
-        c.fillText("🎁", ix + 2, cy + 2);
+        c.fillText("🎁", sx + 28, cy + 2);
       }
-      this.text(truncate(g.label.toUpperCase(), 13), x0 + 92, cy + 2, 22, "#ffffff", "left", 6);
+      // Label
+      this.text(truncate(g.label.toUpperCase(), 12), sx + 72, cy + 2, 28, "#ffffff", "left", 6);
+      // Action chip
+      const chip =
+        g.action === "tnt"
+          ? `${g.amount} TNT`
+          : g.action === "win"
+            ? `${g.amount > 0 ? "+" : ""}${g.amount} WIN`
+            : g.action === "dragon"
+              ? "BURN"
+              : g.action === "clear"
+                ? "BOOM"
+                : "FILL";
+      c.font = `20px ${FONT}`;
+      const cw = c.measureText(chip).width + 22;
+      const cx = x0 + w - 18 - cw;
+      c.fillStyle = ACTION_COLORS[g.action];
+      c.beginPath();
+      c.roundRect(cx, cy - 16, cw, 32, 16);
+      c.fill();
+      this.text(chip, cx + cw / 2, cy + 1, 20, "#ffffff", "center", 0);
     });
   }
 
@@ -1547,61 +1883,75 @@ export class TntBoxEngine {
     const fade = Math.min(1, (3.2 - b.age) / 0.5);
     c.globalAlpha = Math.max(0, fade);
     c.save();
-    c.translate(W / 2, 760);
+    c.translate(W / 2, 780);
     c.scale(s, s);
-    this.text(truncate(b.title.toUpperCase(), 14), 0, 0, 72, b.color, "center", 16);
-    this.text(b.sub, 0, 80, 26, "#ffffff", "center", 8);
+    this.panel(-300, -80, 600, 190, 34, b.color);
+    c.save();
+    c.shadowColor = b.color;
+    c.shadowBlur = 30;
+    this.text(truncate(b.title.toUpperCase(), 14), 0, -6, 84, b.color, "center", 14);
+    c.restore();
+    this.text(b.sub, 0, 70, 30, "#ffffff", "center", 6);
     c.restore();
     c.globalAlpha = 1;
   }
 
+  /** Event toasts: pill with a coloured accent stripe; slides in from the left, fades out. */
   private drawToasts(c: CanvasRenderingContext2D) {
     this.toasts.forEach((t, i) => {
-      const fadeIn = Math.min(1, t.age / 0.15);
+      const fadeIn = Math.min(1, t.age / 0.18);
       const fadeOut = Math.min(1, (TOAST_LIFE - t.age) / 0.4);
       const a = Math.min(fadeIn, fadeOut);
-      const y = 1040 + i * 54; // over the tower, clear of the counter and HOLD timer
+      const y = 1040 + i * 60;
+      const slide = (1 - easeOutBack(fadeIn)) * -40;
       c.globalAlpha = a;
-      c.font = `20px ${FONT}`;
-      const w = Math.min(BOX_W - 20, c.measureText(t.text).width + 40);
-      c.fillStyle = "rgba(0,0,0,0.7)";
+      c.font = `26px ${FONT}`;
+      const w = Math.min(BOX_W - 20, c.measureText(t.text).width + 56);
+      const x = W / 2 - w / 2 + slide;
+      c.fillStyle = "rgba(12,18,34,0.85)";
       c.beginPath();
-      c.roundRect(W / 2 - w / 2, y - 22, w, 44, 22);
+      c.roundRect(x, y - 24, w, 48, 24);
       c.fill();
-      this.text(t.text, W / 2, y + 1, 20, t.color, "center", 0);
+      c.fillStyle = t.color;
+      c.beginPath();
+      c.roundRect(x + 6, y - 16, 8, 32, 4);
+      c.fill();
+      this.text(t.text, x + 28, y + 1, 26, t.color, "left", 0);
       c.globalAlpha = 1;
     });
   }
 
-  /** Compact board in the bottom-left corner (the scenery side, clear of the tower). */
+  /** Bottom-left card: rank medals, avatars and blocks destroyed. */
   private drawLeaderboard(c: CanvasRenderingContext2D) {
-    const x0 = this.viewLeft() + 16;
-    const w = BOX_X - BORDER - 32;
+    const x0 = this.viewLeft() + 20;
+    const w = 300;
     const bottom = this.viewBottom();
     const y0 = bottom - (H - LEADERBOARD_Y);
     const h = bottom - y0 - 60; // leave room for the connection badge
-    c.fillStyle = "rgba(0,0,0,0.55)";
-    c.beginPath();
-    c.roundRect(x0, y0, w, h, 16);
-    c.fill();
-
-    this.text("TOP DESTROYERS", x0 + w / 2, y0 + 26, 16, "#ffd54a", "center", 5);
+    this.panel(x0, y0, w, h, 22, "#ff8a65");
+    this.text("💥", x0 + 26, y0 + 28, 22, "#fff", "center", 0);
+    this.text("TOP DESTROYERS", x0 + 46, y0 + 28, 22, "#ffd76a", "left", 5);
 
     const entries = [...this.leaderboard.values()]
       .sort((a, b) => b.blocks - a.blocks || b.coins - a.coins)
-      .slice(0, Math.max(1, Math.floor((h - 56) / 38)));
+      .slice(0, Math.max(1, Math.floor((h - 60) / 40)));
 
     if (entries.length === 0) {
-      this.text("SEND GIFTS!", x0 + w / 2, y0 + 90, 16, "#e2e8f0", "center", 5);
+      this.text("Send gifts to drop TNT!", x0 + w / 2, y0 + 96, 20, "#cbd5e1", "center", 0);
       return;
     }
 
     entries.forEach((e, i) => {
-      const y = y0 + 66 + i * 38;
-      this.text(`${i + 1}`, x0 + 16, y, 16, RANK_COLORS[i], "left", 4);
-      this.drawAvatar(e.avatarUrl, e.nickname, x0 + 56, y, 14);
-      this.text(truncate(e.nickname, 8), x0 + 78, y + 1, 14, "#ffffff", "left", 4);
-      this.text(`${e.blocks}`, x0 + w - 14, y + 1, 14, "#ff8a65", "right", 4);
+      const y = y0 + 72 + i * 40;
+      const medal = RANK_COLORS[i] ?? "#64748b";
+      c.fillStyle = medal;
+      c.beginPath();
+      c.arc(x0 + 26, y, 14, 0, Math.PI * 2);
+      c.fill();
+      this.text(`${i + 1}`, x0 + 26, y + 1, 18, i < 3 ? "#1f2937" : "#ffffff", "center", 0);
+      this.drawAvatar(e.avatarUrl, e.nickname, x0 + 64, y, 15);
+      this.text(truncate(e.nickname, 10), x0 + 88, y + 1, 20, "#ffffff", "left", 0);
+      this.text(`${e.blocks}`, x0 + w - 18, y + 1, 20, "#ff8a65", "right", 0);
     });
   }
 
@@ -1615,9 +1965,12 @@ export class TntBoxEngine {
     c.translate(W / 2, 860);
     c.rotate(wobble);
     c.scale(s, s);
-    this.text("STREAMER", 0, -90, 96, "#ffd54a", "center", 18);
-    this.text("WINS!", 0, 60, 150, "#ffd54a", "center", 22);
+    c.shadowColor = "#ffd54a";
+    c.shadowBlur = 40;
+    this.text("STREAMER", 0, -90, 110, "#ffd54a", "center", 16);
+    this.text("WINS!", 0, 70, 180, "#fff1a8", "center", 20);
+    c.shadowBlur = 0;
     c.restore();
-    this.text(`NEXT ROUND IN ${Math.max(1, Math.ceil(this.wonTimer))}`, W / 2, 1100, 30, "#ffffff");
+    this.text(`Next round in ${Math.max(1, Math.ceil(this.wonTimer))}`, W / 2, 1110, 40, "#ffffff", "center", 8);
   }
 }

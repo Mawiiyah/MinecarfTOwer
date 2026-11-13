@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { ConnectionStatus } from "@/hooks/useTikFinity";
-import { ACTION_NAMES, type ActionKind, type GameSettings, type GameStats, type GiftAction } from "@/lib/game/types";
+import { ACTION_NAMES, DEFAULT_GIFT_ACTIONS, type ActionKind, type GameSettings, type GameStats, type GiftAction } from "@/lib/game/types";
 import { CHARACTER_NAMES, type CharacterKind } from "@/lib/game/characters";
 import ConnectionBadge from "./ConnectionBadge";
 
@@ -407,14 +407,14 @@ function ActionSelect({ value, onChange }: { value: ActionKind; onChange: (v: Ac
 
 /** TNT count or win count; empty/fill don't take an amount. */
 function AmountInput({ action, value, onChange }: { action: ActionKind; value: number; onChange: (v: number) => void }) {
-  if (action !== "tnt" && action !== "win") return <span />;
+  if (action !== "tnt" && action !== "win" && action !== "dragon") return <span />;
   return (
     <input
       type="number"
       value={value}
       min={action === "win" ? -100 : 1}
       max={500}
-      title={action === "tnt" ? "TNT per gift" : "Wins per gift (negative removes)"}
+      title={action === "tnt" ? "TNT per gift" : action === "dragon" ? "Dragons per gift" : "Wins per gift (negative removes)"}
       onChange={(e) => onChange(Math.floor(Number(e.target.value) || 0))}
       className={`${inputCls} text-right font-mono`}
     />
@@ -477,13 +477,23 @@ function GiftActionsEditor({
           </div>
         </div>
       ))}
-      <SmallButton
-        onClick={() =>
-          onChange([...list, { id: `g${Date.now().toString(36)}`, giftName: "Rose", label: "TNT", action: "tnt", amount: 1 }])
-        }
-      >
-        + Add gift
-      </SmallButton>
+      <div className="flex gap-2">
+        <SmallButton
+          onClick={() =>
+            onChange([...list, { id: `g${Date.now().toString(36)}`, giftName: "Rose", label: "TNT", action: "tnt", amount: 1 }])
+          }
+        >
+          + Add gift
+        </SmallButton>
+        <SmallButton
+          onClick={() => {
+            if (confirm("Replace the list with the 6 default gifts (TNT, TNT Rain, Dragon, Empty Box, Fill Box, Plus 1 Win)?"))
+              onChange(DEFAULT_GIFT_ACTIONS.map((g) => ({ ...g })));
+          }}
+        >
+          Reset to 6 default gifts
+        </SmallButton>
+      </div>
       <p className="text-[11px] leading-relaxed text-zinc-500">
         Gifts not on this list still drop TNT by coin value (1–5c = 1, 6–29c = 5, 30c+ = 20).
       </p>
