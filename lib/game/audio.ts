@@ -150,6 +150,22 @@ export class SfxEngine {
     o.stop(t + 0.1);
   }
 
+  /** Clock tick for the final countdown; `urgency` 0..1 raises the pitch. */
+  tick(urgency = 0) {
+    const ctx = this.ensure();
+    if (!ctx || !this.master) return;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = "square";
+    o.frequency.setValueAtTime(660 + urgency * 440, t);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.09, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+    o.connect(g).connect(this.master);
+    o.start(t);
+    o.stop(t + 0.13);
+  }
+
   like() {
     if (!this.allow("like", 4, 200)) return;
     const ctx = this.ensure();

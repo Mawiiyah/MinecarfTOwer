@@ -140,6 +140,14 @@ const BG_GROUND_FRAC = 0.75;
 const BG_GROUND_Y = BOX_Y + BOX_H; // the box floor
 const FONT = '"Press Start 2P", "Courier New", monospace';
 const TOAST_LIFE = 3.2;
+/**
+ * Final-seconds slow motion for the HOLD timer: from SLOW_FROM seconds left the
+ * countdown runs at SLOW_START_RATE of real time, easing down to SLOW_END_RATE
+ * by the last second (so 3 → 2 → 1 each take longer than the one before).
+ */
+const SLOW_FROM = 3;
+const SLOW_START_RATE = 0.55;
+const SLOW_END_RATE = 0.3;
 const BLOCK_WEIGHTS: [BlockType, number][] = [
   ["grass", 34],
   ["dirt", 22],
@@ -252,6 +260,8 @@ export class TntBoxEngine {
   private giftImages = new Map<string, string>();
   private banner: { title: string; sub: string; color: string; age: number } | null = null;
   private nextId = 1;
+  /** Last whole second shown by the HOLD timer (for the countdown tick). */
+  private lastShownSecond = 0;
 
   private statsListener: ((s: GameStats) => void) | null = null;
   private statsAcc = 0;
@@ -880,7 +890,12 @@ export class TntBoxEngine {
 
       // Timer only ticks while the box is 100% full
       if (this.isFull()) {
-        this.timeLeft -= dt;
+        this.timeLeft -= dt * this.countdownRate();
+        const shown = Math.ceil(this.timeLeft);
+        if (shown !== this.lastShownSecond) {
+          this.lastShownSecond = shown;
+          if (shown >= 1 && shown <= SLOW_FROM) this.audio.tick((SLOW_FROM - shown) / Math.max(1, SLOW_FROM - 1));
+        }
         if (this.timeLeft <= 0) this.win();
       } else if (this.settings.resetTimerOnDamage) {
         this.timeLeft = this.settings.timerDuration;
@@ -931,6 +946,13 @@ export class TntBoxEngine {
     this.scroll += (target - this.scroll) * (1 - Math.exp(-dt * 2.5));
     const targetX = Math.min(0, Math.max(MIN_SCROLL_X, SCROLL_X_ANCHOR - b.x));
     this.scrollX += (targetX - this.scrollX) * (1 - Math.exp(-dt * 2.5));
+  }
+
+  /** Real-time speed of the HOLD countdown (1 = normal), slowing over the last seconds. */
+  private countdownRate(): number {
+    if (this.timeLeft > SLOW_FROM) return 1;
+    const p = (SLOW_FROM - Math.max(1, this.timeLeft)) / Math.max(1e-6, SLOW_FROM - 1);
+    return SLOW_START_RATE + (SLOW_END_RATE - SLOW_START_RATE) * p;
   }
 
   private spawnTnt(viewer: Viewer) {
@@ -1458,11 +1480,15 @@ export class TntBoxEngine {
 
     if (full) {
       const urgent = this.timeLeft <= 10;
-      const pop = urgent ? 1 + 0.18 * Math.pow(this.timeLeft % 1, 3) : 1;
+      const final = this.timeLeft <= SLOW_FROM;
+      // Each second "beats": big right as it appears, settling as it slowly runs out.
+      const beat = Math.pow(this.timeLeft % 1, 3);
+      const pop = final ? 1 + 0.45 * beat : urgent ? 1 + 0.18 * beat : 1;
       c.save();
-      c.translate(W * 0.6, 600);
+      c.translate(W * 0.6, final ? 560 : 600);
       c.scale(pop, pop);
-      this.text(`HOLD ${formatTime(this.timeLeft)}`, 0, 0, 56, urgent ? "#ff4d4d" : "#ffffff", "center", 14);
+      if (final) this.text(String(Math.max(1, Math.ceil(this.timeLeft))), 0, 0, 150, "#ff4d4d", "center", 22);
+      else this.text(`HOLD ${formatTime(this.timeLeft)}`, 0, 0, 56, urgent ? "#ff4d4d" : "#ffffff", "center", 14);
       c.restore();
     }
   }
