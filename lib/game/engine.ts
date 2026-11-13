@@ -1433,6 +1433,19 @@ export class TntBoxEngine {
     c.globalAlpha = 1;
   }
 
+  // Edges of the visible window in play-area coordinates. In a 1080x1920 browser
+  // source these are just 0..W / 0..H; in a wider window the side HUD moves out
+  // to the real window edges instead of crowding the middle column.
+  private viewLeft() {
+    return -this.offX;
+  }
+  private viewRight() {
+    return (this.canvas?.width ?? W) - this.offX;
+  }
+  private viewBottom() {
+    return (this.canvas?.height ?? H) - this.offY;
+  }
+
   /** Left-aligned run of differently coloured text pieces on one line. */
   private textRun(parts: [string, string][], x: number, y: number, size: number, stroke: number) {
     const c = this.ctx!;
@@ -1450,7 +1463,8 @@ export class TntBoxEngine {
    */
   private drawHud(c: CanvasRenderingContext2D) {
     const s = this.settings;
-    this.text(`WIN ${this.streamerWins} / ${s.winGoal}`, 30, 66, 52, "#ffffff", "left", 14);
+    const L = this.viewLeft();
+    this.text(`WIN ${this.streamerWins} / ${s.winGoal}`, L + 30, 66, 52, "#ffffff", "left", 14);
     if (s.likeGoalStep > 0) {
       const target = (Math.floor(this.likes / s.likeGoalStep) + 1) * s.likeGoalStep;
       const label = s.likeGoalLabel.trim();
@@ -1462,7 +1476,7 @@ export class TntBoxEngine {
           [String(target), "#7dff6a"],
           [" LIKES", "#ffffff"],
         ],
-        34,
+        L + 34,
         128,
         20,
         7,
@@ -1475,7 +1489,7 @@ export class TntBoxEngine {
     // Sits just above the tower's top as it comes into view, never higher than under the like goal.
     // Floats above the builder's head (~1.6 blocks tall) once the tower top is on screen.
     const counterY = Math.max(196, BOX_Y + this.scroll - CELL * 2.9);
-    const counterX = Math.max(30, BOX_X + this.scrollX + 40);
+    const counterX = Math.max(L + 30, BOX_X + this.scrollX + 40);
     this.text(counter, counterX, counterY, 40, full ? "#7dff6a" : "#ffd84a", "left", 10);
 
     if (full) {
@@ -1499,7 +1513,7 @@ export class TntBoxEngine {
     if (!list.length) return;
     const rowH = 66;
     const w = 330;
-    const x0 = W - w - 18;
+    const x0 = this.viewRight() - w - 18;
     const y0 = 168;
     const h = list.length * rowH + 20;
     c.fillStyle = "rgba(20,24,32,0.55)";
@@ -1561,10 +1575,11 @@ export class TntBoxEngine {
 
   /** Compact board in the bottom-left corner (the scenery side, clear of the tower). */
   private drawLeaderboard(c: CanvasRenderingContext2D) {
-    const x0 = 16;
+    const x0 = this.viewLeft() + 16;
     const w = BOX_X - BORDER - 32;
-    const y0 = LEADERBOARD_Y;
-    const h = H - y0 - 60; // leave room for the connection badge
+    const bottom = this.viewBottom();
+    const y0 = bottom - (H - LEADERBOARD_Y);
+    const h = bottom - y0 - 60; // leave room for the connection badge
     c.fillStyle = "rgba(0,0,0,0.55)";
     c.beginPath();
     c.roundRect(x0, y0, w, h, 16);

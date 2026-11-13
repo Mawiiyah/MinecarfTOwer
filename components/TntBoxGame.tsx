@@ -36,10 +36,8 @@ export default function TntBoxGame({ engine, status, showBadge }: Props) {
       <canvas ref={bgRef} className="absolute inset-0 h-full w-full" />
       <canvas ref={glRef} className="absolute inset-0 h-full w-full" />
       <canvas ref={hudRef} className="absolute inset-0 h-full w-full" />
-      {/* Same box as the play area, so the badge stays on the game, not the window edge. */}
-      <div className="pointer-events-none absolute left-1/2 top-1/2 aspect-[9/16] h-[min(100%,177.78vw)] -translate-x-1/2 -translate-y-1/2">
-        {showBadge && <ConnectionBadge status={status} className="absolute bottom-[1%] left-[2.5%]" />}
-      </div>
+      {/* Bottom-left corner of the window, under the leaderboard. */}
+      {showBadge && <ConnectionBadge status={status} className="pointer-events-none absolute bottom-3 left-3" />}
     </div>
   );
 }
