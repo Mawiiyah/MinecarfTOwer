@@ -6,6 +6,12 @@ import type { GiftDrop, Viewer } from "@/lib/game/types";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
+export interface BridgeState {
+  username: string;
+  status: "idle" | "connecting" | "live" | "waiting";
+  message: string;
+}
+
 export interface LikeEvent {
   viewer: Viewer;
   likeCount: number;
@@ -21,6 +27,8 @@ interface Options {
   onGift?: (g: GiftDrop) => void;
   onLike?: (l: LikeEvent) => void;
   onChat?: (c: ChatEvent) => void;
+  onFollow?: (viewer: Viewer) => void;
+  onShare?: (viewer: Viewer) => void;
 }
 
 type Json = Record<string, unknown>;
@@ -45,15 +53,17 @@ function viewerFrom(d: Json): Viewer {
  *
  * TikFinity message shape: { "event": "gift" | "like" | "chat" | ..., "data": { ... } }
  */
-export function useTikFinity({ url, onGift, onLike, onChat }: Options) {
+export function useTikFinity({ url, onGift, onLike, onChat, onFollow, onShare }: Options) {
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [reconnectNonce, setReconnectNonce] = useState(0);
+  const [bridge, setBridge] = useState<BridgeState | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
 
   // Keep latest handlers without re-opening the socket when they change.
-  const handlers = useRef({ onGift, onLike, onChat });
+  const handlers = useRef({ onGift, onLike, onChat, onFollow, onShare });
   useEffect(() => {
-    handlers.current = { onGift, onLike, onChat };
-  }, [onGift, onLike, onChat]);
+    handlers.current = { onGift, onLike, onChat, onFollow, onShare };
+  }, [onGift, onLike, onChat, onFollow, onShare]);
 
   // Streakable gifts (giftType 1) send repeated events with a growing repeatCount.
   // We track the last count per user+gift and only act on the delta, so TNT
@@ -64,6 +74,15 @@ export function useTikFinity({ url, onGift, onLike, onChat }: Options) {
     if (!isObj(raw)) return;
     const event = String(raw.event ?? raw.type ?? "").toLowerCase();
     const data = isObj(raw.data) ? raw.data : raw;
+
+    if (event === "bridge") {
+      setBridge({
+        username: String(data.username ?? ""),
+        status: String(data.status ?? "idle") as BridgeState["status"],
+        message: String(data.message ?? ""),
+      });
+      return;
+    }
 
     if (event === "gift") {
       const viewer = viewerFrom(data);
@@ -100,6 +119,10 @@ export function useTikFinity({ url, onGift, onLike, onChat }: Options) {
       });
     } else if (event === "chat") {
       handlers.current.onChat?.({ viewer: viewerFrom(data), comment: String(data.comment ?? "") });
+    } else if (event === "follow") {
+      handlers.current.onFollow?.(viewerFrom(data));
+    } else if (event === "share") {
+      handlers.current.onShare?.(viewerFrom(data));
     }
   }, []);
 
@@ -121,6 +144,7 @@ export function useTikFinity({ url, onGift, onLike, onChat }: Options) {
       setStatus("connecting");
       try {
         ws = new WebSocket(url);
+        wsRef.current = ws;
       } catch {
         setStatus("disconnected");
         schedule();
@@ -161,5 +185,13 @@ export function useTikFinity({ url, onGift, onLike, onChat }: Options) {
   /** Feed a fake TikFinity message through the exact same parser (used by test buttons). */
   const inject = handleMessage;
 
-  return { status, reconnect, inject };
+  /** Ask the local bridge to (re)connect to a TikTok username. False if the bridge is unreachable. */
+  const setUsername = useCallback((username: string) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== 1) return false;
+    ws.send(JSON.stringify({ event: "setUsername", data: { username } }));
+    return true;
+  }, []);
+
+  return { status, reconnect, inject, bridge, setUsername };
 }

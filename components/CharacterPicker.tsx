@@ -8,8 +8,9 @@ const BLURBS: Record<CharacterKind, string> = {
   penguin: "Bonnet & scarf",
   knight: "Plumed helmet & sword",
   ninja: "Red headband",
-  astronaut: "Gold visor & backpack",
+  astronaut: "Sci-Fi Space Blocks & Visor",
   builder: "Hard hat & overalls",
+  kuromi: "Jester hood & skull",
 };
 
 const KINDS = Object.keys(CHARACTER_NAMES) as CharacterKind[];
@@ -21,9 +22,11 @@ const KINDS = Object.keys(CHARACTER_NAMES) as CharacterKind[];
 export default function CharacterPicker({
   value,
   onChange,
+  className,
 }: {
   value: CharacterKind;
   onChange: (k: CharacterKind) => void;
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -45,7 +48,7 @@ export default function CharacterPicker({
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className="fixed bottom-3 right-3 z-40 flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-4 py-2 text-sm font-bold text-white shadow-lg backdrop-blur transition hover:bg-black/85 active:scale-95"
+        className={`flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-4 py-2 text-sm font-bold text-white shadow-lg backdrop-blur transition hover:bg-black/85 active:scale-95 ${className ?? ""}`}
       >
         <span className="text-lg leading-none">{emoji}</span>
         <span>{rest.join(" ")}</span>

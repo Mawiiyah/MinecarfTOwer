@@ -7,3 +7,5 @@ next-env.d.ts
 
 # Reference screenshots (other people's content) stay local
 assets/reference-*
+
+.env.local

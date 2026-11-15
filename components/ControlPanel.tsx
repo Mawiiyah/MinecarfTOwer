@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import type { ConnectionStatus } from "@/hooks/useTikFinity";
-import { ACTION_NAMES, DEFAULT_GIFT_ACTIONS, type ActionKind, type GameSettings, type GameStats, type GiftAction } from "@/lib/game/types";
+import { useEffect, useRef, useState } from "react";
+import type { BridgeState, ConnectionStatus } from "@/hooks/useTikFinity";
+import { ACTION_NAMES, DEFAULT_GIFT_ACTIONS, type ActionKind, type GameSettings, type GameStats, type GiftAction, type GraphicsQuality } from "@/lib/game/types";
 import { CHARACTER_NAMES, type CharacterKind } from "@/lib/game/characters";
+import { BACKGROUND_OPTIONS, type BackgroundKind } from "@/lib/game/backgrounds";
+import { BLOCK_THEMES, INDIVIDUAL_BLOCKS, type BlockTheme } from "@/lib/game/blockThemes";
+import type { ChatTtsEngine } from "@/lib/game/tts";
 import ConnectionBadge from "./ConnectionBadge";
 
 export interface LogLine {
@@ -17,6 +20,8 @@ interface Props {
   onToggle: () => void;
   status: ConnectionStatus;
   onReconnect: () => void;
+  bridge: BridgeState | null;
+  onSetUsername: (username: string) => boolean;
   settings: GameSettings;
   onSettings: (s: GameSettings) => void;
   stats: GameStats | null;
@@ -29,6 +34,10 @@ interface Props {
   onFillBox: () => void;
   onResetRound: () => void;
   onResetLeaderboard: () => void;
+  onSimulateFollow?: () => void;
+  onSimulateShare?: () => void;
+  onSimulateChat?: (msg?: string) => void;
+  tts?: ChatTtsEngine;
 }
 
 const LOG_COLORS: Record<LogLine["kind"], string> = {
@@ -101,6 +110,26 @@ export default function ControlPanel(props: Props) {
   const { open, onToggle, status, settings, onSettings, stats, log } = props;
   const [urlDraft, setUrlDraft] = useState(settings.wsUrl);
   useEffect(() => setUrlDraft(settings.wsUrl), [settings.wsUrl]);
+  const [userDraft, setUserDraft] = useState("");
+  const [userErr, setUserErr] = useState("");
+  const bridgeUser = props.bridge?.username;
+  useEffect(() => {
+    if (bridgeUser !== undefined) setUserDraft((d) => (d === "" ? bridgeUser : d));
+  }, [bridgeUser]);
+  const bgFileInputRef = useRef<HTMLInputElement>(null);
+  const bgmFileInputRef = useRef<HTMLInputElement>(null);
+
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  useEffect(() => {
+    if (props.tts) {
+      setAvailableVoices(props.tts.getVoices());
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.onvoiceschanged = () => {
+          setAvailableVoices(props.tts?.getVoices() ?? []);
+        };
+      }
+    }
+  }, [props.tts]);
 
   const set = <K extends keyof GameSettings>(key: K, value: GameSettings[K]) =>
     onSettings({ ...settings, [key]: value });
@@ -166,6 +195,47 @@ export default function ControlPanel(props: Props) {
             </form>
           </div>
 
+          <Section title="TikTok LIVE">
+            <form
+              className="space-y-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const ok = props.onSetUsername(userDraft);
+                setUserErr(ok ? "" : "Bridge not running. Start the game with npm run dev.");
+              }}
+            >
+              <label className="block text-xs text-zinc-400">TikTok username (must be LIVE)</label>
+              <div className="flex gap-2">
+                <input
+                  value={userDraft}
+                  onChange={(e) => setUserDraft(e.target.value)}
+                  placeholder="@yourname"
+                  className="min-w-0 flex-1 rounded bg-zinc-900 px-2 py-1 text-sm text-zinc-200 outline-none ring-1 ring-white/10 focus:ring-green-500"
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <button type="submit" className="rounded bg-green-600 px-3 py-1 text-xs font-bold hover:bg-green-500">
+                  Connect
+                </button>
+              </div>
+            </form>
+            {props.bridge && (
+              <p className="text-xs text-zinc-300">
+                <span
+                  className={`mr-1 inline-block h-2 w-2 rounded-full ${
+                    props.bridge.status === "live"
+                      ? "bg-green-500"
+                      : props.bridge.status === "idle"
+                        ? "bg-zinc-500"
+                        : "bg-yellow-500"
+                  }`}
+                />
+                {props.bridge.message || props.bridge.status}
+              </p>
+            )}
+            {userErr && <p className="text-xs text-red-400">{userErr}</p>}
+          </Section>
+
           {stats && (
             <div className="grid grid-cols-3 gap-2 text-center text-xs">
               <Stat label="Filled" value={`${Math.round((stats.filled / stats.total) * 100)}%`} />
@@ -179,17 +249,27 @@ export default function ControlPanel(props: Props) {
 
           <Section title="Test events">
             <div className="grid grid-cols-1 gap-2">
-              <TestButton onClick={() => props.onSimulateGift("rose")} className="bg-rose-600 hover:bg-rose-500">
-                🌹 Simulate Rose (1 TNT)
-              </TestButton>
-              <TestButton onClick={() => props.onSimulateGift("medium")} className="bg-orange-600 hover:bg-orange-500">
-                🎁 Simulate Medium Gift (5 TNT)
-              </TestButton>
-              <TestButton onClick={() => props.onSimulateGift("mega")} className="bg-red-700 hover:bg-red-600">
-                💣 Simulate Mega Gift (20 TNT)
-              </TestButton>
+              {settings.giftActions.map((g) => (
+                <TestButton
+                  key={g.id}
+                  onClick={() => props.onSimulateNamedGift(g.giftName)}
+                  className="bg-zinc-700 hover:bg-zinc-600"
+                >
+                  ? {g.giftName || "(no name)"} - {g.label}
+                  {g.action === "tnt" || g.action === "dragon" || g.action === "win" ? ` x${g.amount}` : ""}
+                </TestButton>
+              ))}
               <TestButton onClick={() => props.onSimulateLikes(10)} className="bg-pink-600 hover:bg-pink-500">
                 ❤️ Simulate +10 Likes
+              </TestButton>
+              <TestButton onClick={() => props.onSimulateFollow?.()} className="bg-sky-600 hover:bg-sky-500">
+                ➕ Simulate Follow (+{settings.followTnt} TNT)
+              </TestButton>
+              <TestButton onClick={() => props.onSimulateShare?.()} className="bg-purple-600 hover:bg-purple-500">
+                📢 Simulate Share (+{settings.shareTnt} TNT)
+              </TestButton>
+              <TestButton onClick={() => props.onSimulateChat?.()} className="bg-indigo-600 hover:bg-indigo-500">
+                💬 Simulate Comment (AI Voice Test)
               </TestButton>
             </div>
           </Section>
@@ -214,6 +294,165 @@ export default function ControlPanel(props: Props) {
               label="Show character button on screen"
               checked={settings.showCharacterButton}
               onChange={(v) => set("showCharacterButton", v)}
+            />
+          </Section>
+
+          <Section title="Background / Senaryo">
+            <div className="grid grid-cols-1 gap-1.5">
+              {BACKGROUND_OPTIONS.map((bg) => (
+                <button
+                  key={bg.id}
+                  type="button"
+                  onClick={() => set("background", bg.id)}
+                  aria-pressed={settings.background === bg.id}
+                  className={`flex items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs font-bold transition ${
+                    settings.background === bg.id
+                      ? "bg-purple-600 text-white ring-2 ring-purple-300"
+                      : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                  }`}
+                >
+                  <div className="flex flex-col">
+                    <span>{bg.name}</span>
+                    <span className="text-[10px] font-normal text-zinc-400">{bg.tagline}</span>
+                  </div>
+                  {settings.background === bg.id && <span className="text-xs">✓</span>}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-2 space-y-2 rounded-lg border border-white/10 bg-zinc-900 p-2.5">
+              <label className="text-[11px] font-bold text-zinc-300">Custom Image (Upload / URL):</label>
+              <input
+                type="file"
+                ref={bgFileInputRef}
+                accept="image/*"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = () => {
+                    const result = reader.result as string;
+                    props.onSettings({
+                      ...settings,
+                      background: "custom",
+                      customBackgroundUrl: result,
+                    });
+                  };
+                  reader.readAsDataURL(file);
+                }}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => bgFileInputRef.current?.click()}
+                className="w-full rounded bg-zinc-800 px-3 py-1.5 text-xs font-semibold text-zinc-200 hover:bg-zinc-700"
+              >
+                📁 Mag-upload mula sa PC
+              </button>
+              <div className="flex gap-1.5">
+                <input
+                  type="text"
+                  placeholder="Image URL (https://...)"
+                  value={settings.customBackgroundUrl || ""}
+                  onChange={(e) => set("customBackgroundUrl", e.target.value)}
+                  className="flex-1 rounded border border-white/10 bg-black/60 px-2 py-1 text-xs text-white placeholder-zinc-500 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => set("background", "custom")}
+                  className="rounded bg-zinc-700 px-2.5 py-1 text-xs font-bold hover:bg-zinc-600"
+                >
+                  Piliin
+                </button>
+              </div>
+            </div>
+
+            <Toggle
+              label="Show background button on screen"
+              checked={settings.showBackgroundButton}
+              onChange={(v) => set("showBackgroundButton", v)}
+            />
+          </Section>
+
+          <Section title="Blocks / Mga Block">
+            <div className="grid grid-cols-1 gap-1.5">
+              {BLOCK_THEMES.map((theme) => {
+                const active = !settings.specificBlock && settings.blockTheme === theme.id;
+                return (
+                  <button
+                    key={theme.id}
+                    type="button"
+                    onClick={() => {
+                      props.onSettings({
+                        ...settings,
+                        blockTheme: theme.id,
+                        specificBlock: null,
+                      });
+                    }}
+                    aria-pressed={active}
+                    className={`flex items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs font-bold transition ${
+                      active
+                        ? "bg-emerald-600 text-white ring-2 ring-emerald-300"
+                        : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                    }`}
+                  >
+                    <div className="flex flex-col">
+                      <span>{theme.name}</span>
+                      <span className="text-[10px] font-normal text-zinc-400">{theme.tagline}</span>
+                    </div>
+                    {active && <span className="text-xs">✓</span>}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-2 space-y-1.5 rounded-lg border border-white/10 bg-zinc-900 p-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-zinc-300">Lock to 1 Specific Block:</span>
+                {settings.specificBlock && (
+                  <button
+                    type="button"
+                    onClick={() => set("specificBlock", null)}
+                    className="text-[10px] text-amber-300 underline hover:text-amber-200"
+                  >
+                    Clear lock
+                  </button>
+                )}
+              </div>
+              <select
+                value={settings.specificBlock || ""}
+                onChange={(e) => set("specificBlock", (e.target.value as any) || null)}
+                className="w-full rounded border border-white/10 bg-black/60 px-2 py-1.5 text-xs text-white focus:outline-none"
+              >
+                <option value="">(None - Follow active theme set)</option>
+                <optgroup label="🧑‍🚀 Astronaut Blocks">
+                  <option value="space_suit">Space Suit (Visor)</option>
+                  <option value="shuttle_hull">Shuttle Hull</option>
+                  <option value="meteor_ore">Meteor Ore</option>
+                  <option value="cargo_crate">Cargo Crate</option>
+                  <option value="control_panel">Control Panel</option>
+                </optgroup>
+                <optgroup label="🖤 Kuromi Blocks">
+                  <option value="kuromi_regular">Kuromi Regular</option>
+                  <option value="dark_jester">Dark Jester</option>
+                  <option value="lucky_skull_box">Lucky Skull Box</option>
+                  <option value="punk_ore">Punk Ore</option>
+                  <option value="spiked_castle">Spiked Castle</option>
+                </optgroup>
+                <optgroup label="⛏️ Classic / Aqua">
+                  <option value="diamond">Diamond Block</option>
+                  <option value="gold">Gold Block</option>
+                  <option value="aqua">Aqua Crystal</option>
+                  <option value="grass">Grass Block</option>
+                  <option value="stone">Stone Block</option>
+                </optgroup>
+              </select>
+            </div>
+
+            <Toggle
+              label="Show block picker button on screen"
+              checked={settings.showBlockButton}
+              onChange={(v) => set("showBlockButton", v)}
             />
           </Section>
 
@@ -255,13 +494,264 @@ export default function ControlPanel(props: Props) {
             <Toggle label="Show gift list on screen" checked={settings.showGiftList} onChange={(v) => set("showGiftList", v)} />
           </Section>
 
+          <Section title="Follow & Share Rewards (Auto TNT)">
+            <p className="text-[11px] text-zinc-400">
+              Kusang nagda-drop ng TNT kapag may nag-follow o nag-share ng TikTok LIVE:
+            </p>
+            <div className="space-y-2.5">
+              <div className="rounded-lg border border-white/10 bg-zinc-900/80 p-2.5 space-y-2">
+                <Toggle
+                  label="➕ Auto TNT sa bawat bagong Follow"
+                  checked={settings.enableFollowReward}
+                  onChange={(v) => set("enableFollowReward", v)}
+                />
+                {settings.enableFollowReward && (
+                  <NumberInput
+                    label="Dami ng TNT per Follow"
+                    value={settings.followTnt}
+                    min={1}
+                    onChange={(v) => set("followTnt", v)}
+                  />
+                )}
+              </div>
+
+              <div className="rounded-lg border border-white/10 bg-zinc-900/80 p-2.5 space-y-2">
+                <Toggle
+                  label="📢 Auto TNT sa bawat Share ng LIVE"
+                  checked={settings.enableShareReward}
+                  onChange={(v) => set("enableShareReward", v)}
+                />
+                {settings.enableShareReward && (
+                  <NumberInput
+                    label="Dami ng TNT per Share"
+                    value={settings.shareTnt}
+                    min={1}
+                    onChange={(v) => set("shareTnt", v)}
+                  />
+                )}
+              </div>
+            </div>
+          </Section>
+
+          <Section title="Background Music (Pang-Hype BGM)">
+            <Toggle
+              label="🎵 Enable Background Music (BGM)"
+              checked={settings.bgmEnabled}
+              onChange={(v) => set("bgmEnabled", v)}
+            />
+            {settings.bgmEnabled && (
+              <div className="space-y-3 mt-1.5">
+                <Slider
+                  label="BGM Music Volume"
+                  value={Math.round(settings.bgmVolume * 100)}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format={(v) => `${v}%`}
+                  onChange={(v) => set("bgmVolume", v / 100)}
+                />
+
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-zinc-400">Piliin ang BGM Style:</label>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => set("bgmTrack", "cyber_hype")}
+                      className={`flex items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs font-bold transition ${
+                        settings.bgmTrack === "cyber_hype"
+                          ? "bg-indigo-600 text-white ring-2 ring-indigo-300"
+                          : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                      }`}
+                    >
+                      <div className="flex flex-col">
+                        <span>⚡ Cyber Hype (Electronic Driving Beat)</span>
+                        <span className="text-[10px] font-normal text-zinc-400">
+                          Matinding 132 BPM electro groove na bumibilis sa countdown!
+                        </span>
+                      </div>
+                      {settings.bgmTrack === "cyber_hype" && <span>✓</span>}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => set("bgmTrack", "arcade_rush")}
+                      className={`flex items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs font-bold transition ${
+                        settings.bgmTrack === "arcade_rush"
+                          ? "bg-fuchsia-600 text-white ring-2 ring-fuchsia-300"
+                          : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                      }`}
+                    >
+                      <div className="flex flex-col">
+                        <span>🕹️ Arcade Rush (8-bit High Energy)</span>
+                        <span className="text-[10px] font-normal text-zinc-400">
+                          Masiglang retro arcade synth para sa hyper gameplay!
+                        </span>
+                      </div>
+                      {settings.bgmTrack === "arcade_rush" && <span>✓</span>}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => set("bgmTrack", "custom")}
+                      className={`flex items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs font-bold transition ${
+                        settings.bgmTrack === "custom"
+                          ? "bg-amber-600 text-white ring-2 ring-amber-300"
+                          : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                      }`}
+                    >
+                      <div className="flex flex-col">
+                        <span>📁 Sariling Music Track (Upload / URL)</span>
+                        <span className="text-[10px] font-normal text-zinc-400">
+                          Mag-upload ng paboritong MP3 o ilagay ang audio link.
+                        </span>
+                      </div>
+                      {settings.bgmTrack === "custom" && <span>✓</span>}
+                    </button>
+                  </div>
+                </div>
+
+                {settings.bgmTrack === "custom" && (
+                  <div className="space-y-2 rounded-lg border border-white/10 bg-zinc-900 p-2.5">
+                    <input
+                      type="file"
+                      ref={bgmFileInputRef}
+                      accept="audio/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          const result = reader.result as string;
+                          props.onSettings({
+                            ...settings,
+                            bgmTrack: "custom",
+                            customBgmUrl: result,
+                          });
+                        };
+                        reader.readAsDataURL(file);
+                      }}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => bgmFileInputRef.current?.click()}
+                      className="w-full rounded bg-zinc-800 px-3 py-1.5 text-xs font-semibold text-zinc-200 hover:bg-zinc-700"
+                    >
+                      📁 Mag-upload ng MP3 / Audio mula sa PC
+                    </button>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        placeholder="Audio URL (https://...mp3)"
+                        value={settings.customBgmUrl || ""}
+                        onChange={(e) => set("customBgmUrl", e.target.value)}
+                        className="flex-1 rounded border border-white/10 bg-black/60 px-2 py-1 text-xs text-white placeholder-zinc-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </Section>
+
+          <Section title="AI Voice Chat Reader (Auto-Read)">
+            <p className="text-[11px] text-zinc-400">
+              Awtomatikong binabasa nang malinaw ng AI voice ang mga nagko-comment sa TikTok LIVE:
+            </p>
+            <div className="space-y-2.5">
+              <Toggle
+                label="🗣️ Auto-Read Chat Comments gamit ang AI"
+                checked={settings.ttsEnabled}
+                onChange={(v) => set("ttsEnabled", v)}
+              />
+
+              {settings.ttsEnabled && (
+                <div className="space-y-3 rounded-lg border border-white/10 bg-zinc-900/80 p-2.5">
+                  <Toggle
+                    label="Isama ang pangalan ng nag-comment (e.g. 'Juan says:')"
+                    checked={settings.ttsIncludeName}
+                    onChange={(v) => set("ttsIncludeName", v)}
+                  />
+
+                  <Slider
+                    label="AI Voice Volume"
+                    value={Math.round(settings.ttsVolume * 100)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    format={(v) => `${v}%`}
+                    onChange={(v) => set("ttsVolume", v / 100)}
+                  />
+
+                  <Slider
+                    label="Voice Speed / Bilis"
+                    value={Math.round(settings.ttsRate * 100)}
+                    min={70}
+                    max={160}
+                    step={5}
+                    format={(v) => `${(v / 100).toFixed(2)}x`}
+                    onChange={(v) => set("ttsRate", v / 100)}
+                  />
+
+                  <Slider
+                    label="Voice Pitch / Tono"
+                    value={Math.round(settings.ttsPitch * 100)}
+                    min={60}
+                    max={140}
+                    step={5}
+                    format={(v) => `${(v / 100).toFixed(2)}`}
+                    onChange={(v) => set("ttsPitch", v / 100)}
+                  />
+
+                  {availableVoices.length > 0 && (
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-zinc-300">Piliin ang Boses (AI Voice):</label>
+                      <select
+                        value={settings.ttsVoiceURI}
+                        onChange={(e) => set("ttsVoiceURI", e.target.value)}
+                        className="w-full rounded border border-white/10 bg-black/60 px-2 py-1.5 text-xs text-white focus:outline-none"
+                      >
+                        <option value="">(Auto-Select Natural / Tagalog / English Voice)</option>
+                        {availableVoices.map((v) => (
+                          <option key={v.voiceURI} value={v.voiceURI}>
+                            {v.name} ({v.lang})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      props.tts?.speak(
+                        "Hello stream! Naririnig niyo na po ang boses ng AI! Mag-comment lang kayo at babasahin ko!",
+                        {
+                          enabled: true,
+                          volume: settings.ttsVolume,
+                          rate: settings.ttsRate,
+                          pitch: settings.ttsPitch,
+                          includeName: false,
+                          voiceURI: settings.ttsVoiceURI,
+                        },
+                      );
+                    }}
+                    className="w-full rounded bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-500"
+                  >
+                    🔊 Subukan ang Boses ng AI (Test Voice)
+                  </button>
+                </div>
+              )}
+            </div>
+          </Section>
+
           <Section title="Settings">
             <Slider
               label="Timer Duration"
               value={settings.timerDuration}
-              min={10}
+              min={5}
               max={180}
-              step={5}
+              step={1}
               format={(v) => `${v}s`}
               onChange={(v) => set("timerDuration", v)}
             />
@@ -284,9 +774,9 @@ export default function ControlPanel(props: Props) {
               onChange={(v) => set("volume", v / 100)}
             />
             <Toggle
-              label="Builder walks by itself when idle"
-              checked={settings.idleAutoWalk}
-              onChange={(v) => set("idleAutoWalk", v)}
+              label="🤖 Auto-Pilot (Kusang maglalaro habang AFK)"
+              checked={settings.autoPilot}
+              onChange={(v) => set("autoPilot", v)}
             />
             <Toggle
               label="Reset timer when box is damaged"
@@ -303,6 +793,98 @@ export default function ControlPanel(props: Props) {
               checked={settings.showBadge}
               onChange={(v) => set("showBadge", v)}
             />
+          </Section>
+
+          <Section title="Graphics & Performance (Anti-Lag)">
+            <p className="text-[11px] text-zinc-400">
+              Pumili ng preset depende sa specs ng PC o laptop mo para walang lag habang nagla-live:
+            </p>
+            <div className="grid grid-cols-1 gap-1.5">
+              <button
+                type="button"
+                onClick={() =>
+                  props.onSettings({
+                    ...settings,
+                    graphicsQuality: "low",
+                    enableShadows: false,
+                  })
+                }
+                className={`flex flex-col rounded-md px-3 py-2 text-left transition ${
+                  settings.graphicsQuality === "low" && !settings.enableShadows
+                    ? "bg-amber-600 text-white ring-2 ring-amber-300"
+                    : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                }`}
+              >
+                <div className="flex items-center justify-between font-bold text-xs">
+                  <span>⚡ Low / Potato (Super Smooth / Walang Lag)</span>
+                  {settings.graphicsQuality === "low" && !settings.enableShadows && <span>✓ Active</span>}
+                </div>
+                <span className="text-[10px] opacity-80">
+                  Para sa mahihinang laptop/PC o integrated GPU. Walang shadows, optimized resolution & particles.
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  props.onSettings({
+                    ...settings,
+                    graphicsQuality: "medium",
+                    enableShadows: false,
+                  })
+                }
+                className={`flex flex-col rounded-md px-3 py-2 text-left transition ${
+                  settings.graphicsQuality === "medium" && !settings.enableShadows
+                    ? "bg-emerald-600 text-white ring-2 ring-emerald-300"
+                    : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                }`}
+              >
+                <div className="flex items-center justify-between font-bold text-xs">
+                  <span>⚖️ Balanced (Recommended)</span>
+                  {settings.graphicsQuality === "medium" && !settings.enableShadows && <span>✓ Active</span>}
+                </div>
+                <span className="text-[10px] opacity-80">
+                  Standard 1080p crisp visuals, walang mabigat na shadows. Swak sa karamihan ng streaming setup.
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  props.onSettings({
+                    ...settings,
+                    graphicsQuality: "high",
+                    enableShadows: true,
+                  })
+                }
+                className={`flex flex-col rounded-md px-3 py-2 text-left transition ${
+                  settings.graphicsQuality === "high" && settings.enableShadows
+                    ? "bg-purple-600 text-white ring-2 ring-purple-300"
+                    : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                }`}
+              >
+                <div className="flex items-center justify-between font-bold text-xs">
+                  <span>🚀 High / Ultra (Malakas na PC)</span>
+                  {settings.graphicsQuality === "high" && settings.enableShadows && <span>✓ Active</span>}
+                </div>
+                <span className="text-[10px] opacity-80">
+                  3D dynamic soft shadows, max particle effects, retina DPI scaling. Para sa gaming PC na may dedicated GPU.
+                </span>
+              </button>
+            </div>
+
+            <div className="mt-2 space-y-2 rounded-lg border border-white/10 bg-zinc-900/80 p-2.5">
+              <Toggle
+                label="Enable 3D Shadows (Mabigat sa mahinang GPU)"
+                checked={settings.enableShadows}
+                onChange={(v) => set("enableShadows", v)}
+              />
+              <Toggle
+                label="Show Real-Time FPS Counter sa screen"
+                checked={settings.showFps}
+                onChange={(v) => set("showFps", v)}
+              />
+            </div>
           </Section>
 
           <Section title="Round">

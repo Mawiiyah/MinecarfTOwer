@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { BLAST_RADIUS, BORDER, BOX_H, BOX_W, BOX_X, BOX_Y, CELL, COLS, H, MAX_PARTICLES, ROWS, TNT_SIZE, W } from "./constants";
 import type { TextureName, TextureSet } from "./textures";
-import type { BlockType } from "./types";
+import type { BlockType, GraphicsQuality } from "./types";
 import type { Builder, Cell, Dragon, Particle, Ring, Tnt } from "./engine";
 import { buildDragon, type DragonRig } from "./dragon";
 import { buildCharacter, CHARACTER_SCALE, type CharacterKind, type CharacterRig } from "./characters";
@@ -38,7 +38,24 @@ const CAM_LIFT = 1.6;
 /** Gentle camera sway, in world units (0 = perfectly still, like the reference). */
 const SWAY = 0;
 
-const BLOCK_TYPES: BlockType[] = ["grass", "dirt", "stone", "gold", "diamond", "aqua"];
+const BLOCK_TYPES: BlockType[] = [
+  "grass",
+  "dirt",
+  "stone",
+  "gold",
+  "diamond",
+  "aqua",
+  "kuromi_regular",
+  "dark_jester",
+  "lucky_skull_box",
+  "punk_ore",
+  "spiked_castle",
+  "space_suit",
+  "shuttle_hull",
+  "meteor_ore",
+  "cargo_crate",
+  "control_panel",
+];
 const MAX_DEBRIS = 1400;
 const MAX_FX = 24;
 const MAX_LIGHTS = 4;
@@ -59,6 +76,8 @@ export interface SceneView {
   /** Camera pan in game pixels (screen x = game x + scrollX). */
   scrollX: number;
   dragon: Dragon | null;
+  /** Whether to render the 3-D procedural landscape (island, ocean, clouds) behind the tower. */
+  show3dLandscape?: boolean;
 }
 
 function pixelTexture(src: HTMLCanvasElement, repeatX = 1, repeatY = 1): THREE.Texture {
@@ -212,7 +231,10 @@ export class Scene3D {
   /** 3-D scenery drawn behind the tower with its own camera. */
   private landscape = new Landscape();
   private dragonRig: DragonRig;
-  private characterKind: CharacterKind = "penguin";
+  private characterKind: CharacterKind = "kuromi";
+  private sun: THREE.DirectionalLight | null = null;
+  private quality: GraphicsQuality = "medium";
+  private shadowsEnabled = false;
   private debris: THREE.InstancedMesh;
   private smoke = new PointBatch(MAX_PARTICLES, SOFT_FRAG, false);
   private sparks = new PointBatch(MAX_PARTICLES, SQUARE_FRAG, true);
@@ -241,8 +263,7 @@ export class Scene3D {
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: "high-performance" });
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.autoClear = false; // landscape first, then the tower on top
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.enabled = false;
     this.scene.add(this.world);
 
     this.addLights();
@@ -288,10 +309,11 @@ export class Scene3D {
   private addLights() {
     this.scene.add(new THREE.HemisphereLight(0xc9d8ff, 0x5a4632, 1.7));
     const sun = new THREE.DirectionalLight(0xfff0dc, 2.1);
+    this.sun = sun;
     sun.target.position.set(BX, ROWS / 2, CZ);
     sun.position.set(BX - 9, ROWS / 2 + 23, 26);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.castShadow = this.shadowsEnabled;
+    sun.shadow.mapSize.set(1024, 1024);
     const sc = sun.shadow.camera;
     sc.left = -(COLS / 2 + 4);
     sc.right = COLS / 2 + 4;
@@ -349,11 +371,39 @@ export class Scene3D {
     const geo = new THREE.BoxGeometry(1, 1, 1);
     const lam = (name: TextureName) =>
       new THREE.MeshLambertMaterial({ map: name === "aqua" ? smoothTexture(tex[name], this.renderer) : pixelTexture(tex[name]) });
+    const loader = new THREE.TextureLoader();
+    const loadTex = (url: string) => {
+      const t = loader.load(url);
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.magFilter = THREE.NearestFilter;
+      t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+      return t;
+    };
+    const pngMat = (url: string) => new THREE.MeshLambertMaterial({ map: loadTex(url) });
+
     for (const type of BLOCK_TYPES) {
       let material: THREE.Material | THREE.Material[];
       if (type === "grass") {
         const side = lam("grass");
         material = [side, side, lam("grassTop"), lam("dirt"), side, side];
+      } else if (
+        type === "kuromi_regular" ||
+        type === "dark_jester" ||
+        type === "lucky_skull_box" ||
+        type === "punk_ore" ||
+        type === "spiked_castle" ||
+        type === "space_suit" ||
+        type === "shuttle_hull" ||
+        type === "meteor_ore" ||
+        type === "cargo_crate" ||
+        type === "control_panel"
+      ) {
+        const front = pngMat(`/blocks/${type}.png`);
+        const side = pngMat(`/blocks/${type}_side.png`);
+        const top = pngMat(`/blocks/${type}_top.png`);
+        // BoxGeometry face order: [+x, -x, +y, -y, +z, -z]
+        material = [side, side, top, side, front, side];
       } else {
         material = lam(type);
       }
@@ -383,6 +433,29 @@ export class Scene3D {
     this.characterKind = kind;
   }
 
+  setGraphics(enableShadows: boolean, quality: GraphicsQuality) {
+    this.shadowsEnabled = enableShadows;
+    this.quality = quality;
+    this.renderer.shadowMap.enabled = enableShadows;
+    if (this.sun) {
+      this.sun.castShadow = enableShadows;
+      if (quality === "low") {
+        this.renderer.shadowMap.type = THREE.BasicShadowMap;
+        this.sun.shadow.mapSize.set(512, 512);
+      } else if (quality === "medium") {
+        this.renderer.shadowMap.type = THREE.BasicShadowMap;
+        this.sun.shadow.mapSize.set(1024, 1024);
+      } else {
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        this.sun.shadow.mapSize.set(2048, 2048);
+      }
+      this.sun.shadow.map?.dispose();
+      this.sun.shadow.map = null;
+    }
+    const dpr = quality === "low" ? 0.8 : quality === "medium" ? 1.0 : Math.min(2, window.devicePixelRatio || 1);
+    this.renderer.setPixelRatio(dpr);
+  }
+
   // ───────────────────────────── viewport ─────────────────────────────
 
   /** `vw`/`vh` is the visible area in game pixels; the play area sits at (offX, offY) inside it. */
@@ -391,7 +464,7 @@ export class Scene3D {
     this.vh = vh;
     this.offX = offX;
     this.offY = offY;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = this.quality === "low" ? 0.8 : this.quality === "medium" ? 1.0 : Math.min(2, window.devicePixelRatio || 1);
     this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(cssW, cssH, false);
     this.landscape.resize(cssW / Math.max(1, cssH));
@@ -443,10 +516,13 @@ export class Scene3D {
     this.syncParticles(view.particles);
     this.syncRings(view.rings);
 
-    this.landscape.update(t, view.scroll / CELL, -view.scrollX / CELL);
+    const show3d = view.show3dLandscape ?? true;
     this.renderer.clear();
-    this.renderer.render(this.landscape.scene, this.landscape.camera);
-    this.renderer.clearDepth();
+    if (show3d) {
+      this.landscape.update(t, view.scroll / CELL, -view.scrollX / CELL);
+      this.renderer.render(this.landscape.scene, this.landscape.camera);
+      this.renderer.clearDepth();
+    }
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -540,12 +616,11 @@ export class Scene3D {
     r.root.visible = !!d;
     if (!d) return;
     r.root.position.set(gx(d.x), gy(d.y), CZ + 0.6);
-    r.root.rotation.set(0, d.dir > 0 ? -0.35 : Math.PI + 0.35, Math.sin(time * 4) * 0.06);
-    const flap = Math.sin(time * 10);
-    r.wingL.rotation.x = flap * 0.7;
-    r.wingR.rotation.x = -flap * 0.7;
-    r.jaw.rotation.z = -0.25 - Math.abs(Math.sin(time * 12)) * 0.2;
-    r.tail.rotation.y = Math.sin(time * 5) * 0.3;
+    r.setPose(d.dir, d.burnCol >= 0);
+    // Slight yaw so the painted dragon sits in the 3D box, plus bob and a wing-beat squash.
+    r.root.rotation.set(0.05, d.dir > 0 ? -0.12 : 0.12, Math.sin(time * 4) * 0.03);
+    const flap = Math.sin(time * 9);
+    r.root.scale.set(1, 1 + flap * 0.03, 1 + flap * 0.03);
   }
 
   private parsed(hex: string, raw: boolean): THREE.Color {

@@ -29,8 +29,11 @@ import {
 import { BLOCK_PARTICLE_COLORS, createTextures, type TextureSet } from "./textures";
 import { AerialBackdrop } from "./aerial";
 import { Scene3D } from "./scene3d";
+import { type CharacterKind } from "./characters";
 import {
   DEFAULT_SETTINGS,
+  KUROMI_BLOCK_TYPES,
+  ASTRONAUT_BLOCK_TYPES,
   type ActionKind,
   type BlockType,
   type GameSettings,
@@ -39,6 +42,7 @@ import {
   type LeaderEntry,
   type Viewer,
 } from "./types";
+import { type BlockTheme } from "./blockThemes";
 
 export interface Cell {
   type: BlockType;
@@ -128,6 +132,9 @@ export interface Dragon {
   t: number;
   lastCol: number;
   viewer: Viewer;
+  /** Column being burnt right now (-1 = flying), and seconds of fire left on it. */
+  burnCol: number;
+  burnLeft: number;
 }
 
 export interface Ring {
@@ -151,19 +158,69 @@ const BG_GROUND_Y = BOX_Y + BOX_H; // the box floor
 /** Chunky rounded display font for the HUD (loaded in app/layout.tsx); falls back to a heavy system font. */
 const FONT = '"Lilita One", "Arial Black", system-ui, sans-serif';
 /** Accent colours for the gift-action chips. */
+/** Pictures for the default gift rows: the TikTok gift and what it does. */
+const GIFT_ICONS: Record<string, { gift: string; result: string }> = {
+  g1: { gift: "/gifts/rose.png", result: "/gifts/tnt.png" },
+  g2: { gift: "/gifts/fingerheart.png", result: "/gifts/tntrain.png" },
+  g3: { gift: "/gifts/iloveyou.png", result: "/gifts/dragon.png" },
+  g4: { gift: "/gifts/doughnut.png", result: "/gifts/emptybox.png" },
+  g5: { gift: "/gifts/perfume.png", result: "/gifts/fillbox.png" },
+  g6: { gift: "/gifts/hat.png", result: "/gifts/win.png" },
+};
 const ACTION_COLORS: Record<ActionKind, string> = { tnt: "#ef4444", dragon: "#8b5cf6", clear: "#f97316", fill: "#14b8a6", win: "#eab308" };
+/** Standard coin / diamond values for known TikTok gifts */
+const KNOWN_GIFT_COINS: Record<string, number> = {
+  rose: 1,
+  rosa: 1,
+  "finger heart": 5,
+  "i love you": 100,
+  doughnut: 30,
+  perfume: 20,
+  "hat and mustache": 99,
+  cap: 99,
+  galaxy: 1000,
+  dragon: 1000,
+  lion: 29999,
+  tiktok: 1,
+  panda: 5,
+  heart: 10,
+  confetti: 100,
+  swan: 500,
+};
 /** Dragon flight speed (px/s) and how far outside the box it starts/ends. */
 const DRAGON_SPEED = 520;
 const DRAGON_MARGIN = 260;
 const TOAST_LIFE = 3.2;
+const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+const IDLE_LINES = [
+  "Kaya pa ba?",
+  "Matatalo niyo ba ako?",
+  "Tara, subukan niyo ako!",
+  "Ang tibay ng tower ko!",
+  "Sino magpapasabog sa akin?",
+  "Bakit ang tahimik niyo?",
+  "Gift naman diyan!",
+  "Hindi ako matitinag!",
+  "Kaya ko 'to!",
+  "Yan lang ba kaya niyo?",
+  "Dagdagan niyo pa ang blocks!",
+  "Walang makakatalo sa akin!",
+];
+const FULL_LINES = ["Puno na! Konting hold na lang!", "Ayan, malapit na akong manalo!", "Kaya niyo pa bang sirain to?"];
+const TNT_LINES = ["Aray ko po!", "Wag na po, tama na please!", "Naku, TNT na naman!", "Maawa naman kayo!", "Ayoko na! Tama na!", "Sorry na po!", "Bakit ako lang?!"];
+const DRAGON_LINES = ["May dragon?! Takbo!", "Wag po dragon, please!", "Aaah ang init!", "Ayoko ng dragon!"];
+const CLEAR_LINES = ["Huwag po! Ang tower ko!", "Wag mong sirain lahat!", "Nooo! Nawala lahat!"];
+const FILL_LINES = ["Wow, ang dami ng blocks!", "Ay, tulong ba yan?"];
+const WIN_LINES = ["Salamat! Panalo na ako!", "Yes! Dagdag win!"];
+const HIT_LINES = ["AAAAAY!", "Aray ko po!", "Nanay ko po!", "Ang sakit! Tama na!", "Susuko na ako! Joke lang!"];
 /**
  * Final-seconds slow motion for the HOLD timer: from SLOW_FROM seconds left the
  * countdown runs at SLOW_START_RATE of real time, easing down to SLOW_END_RATE
  * by the last second (so 3 → 2 → 1 each take longer than the one before).
  */
 const SLOW_FROM = 3;
-const SLOW_START_RATE = 0.55;
-const SLOW_END_RATE = 0.3;
+const SLOW_START_RATE = 0.35;
+const SLOW_END_RATE = 0.20;
 const BLOCK_WEIGHTS: [BlockType, number][] = [
   ["grass", 34],
   ["dirt", 22],
@@ -172,13 +229,69 @@ const BLOCK_WEIGHTS: [BlockType, number][] = [
   ["diamond", 9],
 ];
 const BLOCK_WEIGHT_TOTAL = BLOCK_WEIGHTS.reduce((s, [, w]) => s + w, 0);
+
+const KUROMI_BLOCK_WEIGHTS: [BlockType, number][] = [
+  ["kuromi_regular", 34],
+  ["dark_jester", 22],
+  ["lucky_skull_box", 22],
+  ["punk_ore", 13],
+  ["spiked_castle", 9],
+];
+const KUROMI_BLOCK_WEIGHT_TOTAL = KUROMI_BLOCK_WEIGHTS.reduce((s, [, w]) => s + w, 0);
+
+function randomKuromiBlock(): BlockType {
+  let r = Math.random() * KUROMI_BLOCK_WEIGHT_TOTAL;
+  for (const [type, w] of KUROMI_BLOCK_WEIGHTS) {
+    r -= w;
+    if (r <= 0) return type;
+  }
+  return "kuromi_regular";
+}
+
+const ASTRONAUT_BLOCK_WEIGHTS: [BlockType, number][] = [
+  ["space_suit", 30],
+  ["shuttle_hull", 25],
+  ["control_panel", 20],
+  ["cargo_crate", 15],
+  ["meteor_ore", 10],
+];
+const ASTRONAUT_BLOCK_WEIGHT_TOTAL = ASTRONAUT_BLOCK_WEIGHTS.reduce((s, [, w]) => s + w, 0);
+
+function randomAstronautBlock(): BlockType {
+  let r = Math.random() * ASTRONAUT_BLOCK_WEIGHT_TOTAL;
+  for (const [type, w] of ASTRONAUT_BLOCK_WEIGHTS) {
+    r -= w;
+    if (r <= 0) return type;
+  }
+  return "space_suit";
+}
+
 const CONFETTI_COLORS = ["#ffd54a", "#ff5c8a", "#4ade80", "#38bdf8", "#c084fc", "#ffffff", "#fb923c"];
 const RANK_COLORS = ["#ffd54a", "#d7dde5", "#e0915a", "#9ca3af", "#9ca3af"];
 
-/** Every block in the box uses the same aqua design. Set to null to go back to random mixed blocks. */
+function randomClassicBlock(): BlockType {
+  const r = Math.random();
+  if (r < 0.3) return "diamond";
+  if (r < 0.55) return "gold";
+  if (r < 0.75) return "grass";
+  if (r < 0.9) return "stone";
+  return "dirt";
+}
+
+const ALL_MIXED_BLOCKS: BlockType[] = [
+  "space_suit", "shuttle_hull", "meteor_ore", "cargo_crate", "control_panel",
+  "kuromi_regular", "dark_jester", "lucky_skull_box", "punk_ore", "spiked_castle",
+  "diamond", "gold", "aqua", "grass", "stone", "dirt"
+];
+
+function randomMixedBlock(): BlockType {
+  return ALL_MIXED_BLOCKS[Math.floor(Math.random() * ALL_MIXED_BLOCKS.length)];
+}
+
+/** Default block for non-Kuromi characters. Set to null to go back to random mixed blocks. */
 const SINGLE_BLOCK: BlockType | null = "aqua";
 
-function randomBlock(): BlockType {
+function randomStandardBlock(): BlockType {
   if (SINGLE_BLOCK) return SINGLE_BLOCK;
   let r = Math.random() * BLOCK_WEIGHT_TOTAL;
   for (const [type, w] of BLOCK_WEIGHTS) {
@@ -229,15 +342,18 @@ export class TntBoxEngine {
   private ctx: CanvasRenderingContext2D | null = null;
   private tex: TextureSet | null = null;
   private pt = { x: 0, y: 0 };
+  /** What the builder is saying right now (speech bubble), and the cooldown to the next idle chatter. */
+  private speech: { text: string; age: number; life: number; hurt: boolean } | null = null;
+  private chatCd = 4;
   private backdrop: AerialBackdrop | null = null;
   /** Camera climb in game pixels: screen y = game y + scroll. Follows the builder up the tower. */
   private scroll = 0;
   /** Camera pan in game pixels: screen x = game x + scrollX (0 or negative). */
   private scrollX = 0;
-  /** Background picture (public/background.png). Until it loads, the painted Backdrop shows instead. */
-  private bgImg: HTMLImageElement | null = null;
-  /** Viewport the picture was last drawn for; it is static, so it is only redrawn on resize. */
-  private bgImgKey = "";
+  /** Cache of loaded background images by URL. */
+  private bgImages: Map<string, HTMLImageElement> = new Map();
+  /** Key for current background drawing state. */
+  private bgKey = "";
   private resizeObs: ResizeObserver | null = null;
   private viewKey = "";
   /** Where the 1080x1920 play area sits inside the (window-shaped) canvas. */
@@ -272,18 +388,43 @@ export class TntBoxEngine {
   private round = 1;
   private streamerWins = 0;
   private likes = 0;
+  private viewerLikes = new Map<string, number>();
   /** Gift name (lower case) → picture URL, remembered from incoming gifts for the on-screen list. */
   private giftImages = new Map<string, string>();
   private banner: { title: string; sub: string; color: string; age: number } | null = null;
   /** The dragon currently flying across (DRAGON gift), and how many more are waiting. */
   private dragon: Dragon | null = null;
   private dragonQueue: Viewer[] = [];
+  private dragonTopRow = 0;
   private nextId = 1;
   /** Last whole second shown by the HOLD timer (for the countdown tick). */
   private lastShownSecond = 0;
+  /** Pauses the full-box countdown while a gift/TNT drop is in flight (until it explodes). */
+  private giftPauseUntil = 0;
+
+  private fps = 60;
+  private fpsFrames = 0;
+  private fpsLastTime = 0;
 
   private statsListener: ((s: GameStats) => void) | null = null;
   private statsAcc = 0;
+
+  /** AI state for human-like autonomous gameplay (row sweeps, column pillars, crater repair). */
+  private autoAi: {
+    mode: "row" | "column" | "crater" | "wander";
+    dir: "left" | "right";
+    stepsLeft: number;
+    pillarRemaining: number;
+    targetCol: number;
+    pauseTimer: number;
+  } = {
+    mode: "row",
+    dir: "right",
+    stepsLeft: 14,
+    pillarRemaining: 0,
+    targetCol: 0,
+    pauseTimer: 0,
+  };
 
   constructor() {
     this.builder = this.spawnBuilder();
@@ -304,6 +445,7 @@ export class TntBoxEngine {
       try {
         this.scene3d = new Scene3D(gl, this.tex);
         this.scene3d.setCharacter(this.settings.character);
+        this.scene3d.setGraphics(this.settings.enableShadows, this.settings.graphicsQuality);
       } catch (err) {
         console.error("WebGL unavailable", err);
         this.scene3d = null;
@@ -341,7 +483,7 @@ export class TntBoxEngine {
       cv.width = vw;
       cv.height = vh;
     }
-    this.bgImgKey = ""; // resizing clears the canvas
+    this.bgKey = ""; // resizing clears the canvas
     c.imageSmoothingEnabled = false;
     this.bgCtx!.imageSmoothingEnabled = false;
     this.offX = Math.floor((vw - W) / 2);
@@ -364,6 +506,12 @@ export class TntBoxEngine {
   private frame = (ts: number) => {
     const dt = Math.min(0.05, Math.max(0, (ts - this.lastTs) / 1000));
     this.lastTs = ts;
+    this.fpsFrames++;
+    if (ts - this.fpsLastTime >= 500) {
+      this.fps = Math.round((this.fpsFrames * 1000) / Math.max(1, ts - this.fpsLastTime));
+      this.fpsFrames = 0;
+      this.fpsLastTime = ts;
+    }
     this.update(dt);
     this.render();
     this.rafId = requestAnimationFrame(this.frame);
@@ -375,10 +523,59 @@ export class TntBoxEngine {
     const prev = this.settings;
     this.settings = { ...next };
     this.audio.setVolume(next.volume);
+    this.audio.setBgm(next.bgmEnabled, next.bgmVolume, next.bgmTrack, next.customBgmUrl);
     this.scene3d?.setCharacter(next.character);
+    if (
+      next.enableShadows !== prev.enableShadows ||
+      next.graphicsQuality !== prev.graphicsQuality
+    ) {
+      this.scene3d?.setGraphics(next.enableShadows, next.graphicsQuality);
+    }
+    if (
+      next.character !== prev.character ||
+      next.blockTheme !== prev.blockTheme ||
+      next.specificBlock !== prev.specificBlock
+    ) {
+      this.remapGridBlocks();
+    }
     if (next.timerDuration !== prev.timerDuration) {
       this.timeLeft = this.isFull() ? Math.min(this.timeLeft, next.timerDuration) : next.timerDuration;
     }
+    if (next.background !== prev.background || next.customBackgroundUrl !== prev.customBackgroundUrl) {
+      this.bgKey = "";
+      this.bgCtx?.clearRect(0, 0, this.bgCanvas?.width ?? 0, this.bgCanvas?.height ?? 0);
+    }
+  }
+
+  private getActiveTheme(): BlockTheme {
+    const t = this.settings.blockTheme || "auto";
+    if (t === "auto") {
+      if (this.settings.character === "astronaut") return "astronaut";
+      if (this.settings.character === "kuromi") return "kuromi";
+      return "aqua";
+    }
+    return t;
+  }
+
+  private remapGridBlocks() {
+    for (let i = 0; i < this.grid.length; i++) {
+      const cell = this.grid[i];
+      if (!cell) continue;
+      cell.type = this.randomBlock();
+    }
+  }
+
+  private randomBlock(): BlockType {
+    if (this.settings.specificBlock) {
+      return this.settings.specificBlock;
+    }
+    const theme = this.getActiveTheme();
+    if (theme === "astronaut") return randomAstronautBlock();
+    if (theme === "kuromi") return randomKuromiBlock();
+    if (theme === "classic") return randomClassicBlock();
+    if (theme === "aqua") return "aqua";
+    if (theme === "random_mix") return randomMixedBlock();
+    return randomStandardBlock();
   }
 
   onStats(listener: (s: GameStats) => void): () => void {
@@ -430,14 +627,36 @@ export class TntBoxEngine {
    * Runs a gift-list action (or the like-goal action) `count` times over.
    * `label` is what viewers see in the toast.
    */
-  performAction(viewer: Viewer, label: string, action: ActionKind, amount: number, count: number) {
+  performAction(
+    viewer: Viewer,
+    label: string,
+    action: ActionKind,
+    amount: number,
+    count: number,
+    coins = 0,
+    giftName?: string,
+  ) {
     const n = Math.max(1, Math.floor(count));
     const who = truncate(viewer.nickname, 12);
     const times = n > 1 ? ` x${n}` : "";
+
+    // Live donation tracking: credit donor on the Top Destroyer leaderboard
+    const e = this.entryFor(viewer);
+    let totalCoins = coins;
+    if (totalCoins <= 0 && giftName) {
+      const known = KNOWN_GIFT_COINS[giftName.trim().toLowerCase()] ?? 1;
+      totalCoins = known * n;
+    }
+    if (totalCoins > 0) {
+      e.coins += totalCoins;
+    }
+    e.gifts = (e.gifts || 0) + n;
+
+    this.react(action);
     switch (action) {
       case "tnt": {
         const tnt = Math.max(1, Math.floor(amount)) * n;
-        this.entryFor(viewer).tnt += tnt;
+        e.tnt += tnt;
         this.dropTnt(viewer, tnt);
         this.toast(`${who}: ${label}${times} → ${tnt} TNT`, "#ff8a65");
         break;
@@ -445,6 +664,7 @@ export class TntBoxEngine {
       case "dragon": {
         const count = Math.max(1, Math.floor(amount)) * n;
         for (let i = 0; i < Math.min(count, 10); i++) this.dragonQueue.push(viewer);
+        this.giftPauseUntil = Math.max(this.giftPauseUntil, this.time + 3.0);
         this.toast(`${who}: ${label}${times}!`, "#c4b5fd");
         break;
       }
@@ -468,16 +688,21 @@ export class TntBoxEngine {
 
   handleGift(g: GiftDrop) {
     const e = this.entryFor(g.viewer);
-    e.coins += g.coins;
+    const c = g.coins > 0 ? g.coins : (KNOWN_GIFT_COINS[g.giftName.trim().toLowerCase()] ?? 1) * g.count;
+    e.coins += c;
     e.tnt += g.tnt;
+    e.gifts = (e.gifts || 0) + g.count;
     const giftLabel = g.count > 1 ? `${g.count}x ${g.giftName}` : g.giftName;
     this.toast(`${truncate(g.viewer.nickname, 12)}: ${giftLabel} → ${g.tnt} TNT`, "#ff8a65");
     this.dropTnt(g.viewer, g.tnt);
+    this.react("tnt");
   }
 
   dropTnt(viewer: Viewer, count: number) {
     const room = MAX_QUEUE - this.spawnQueue.length;
     for (let i = 0; i < Math.min(count, room); i++) this.spawnQueue.push(viewer);
+    // Pause countdown for ~3 seconds while TNT drops until it detonates
+    this.giftPauseUntil = Math.max(this.giftPauseUntil, this.time + 3.0);
   }
 
   /**
@@ -493,17 +718,36 @@ export class TntBoxEngine {
     }
     this.pushStats();
     if (this.phase !== "playing") return;
-    const n = Math.max(1, Math.min(50, Math.floor(likes)));
-    let added = 0;
-    for (let i = 0; i < n; i++) {
-      const idx = this.placeBlock(true);
-      if (idx < 0) break;
-      added++;
-    }
-    if (added > 0) {
+    // Likes no longer drop blocks: every 100 likes from one viewer drops a TNT.
+    const total = Math.max(1, Math.floor(likes));
+    const prevV = this.viewerLikes.get(viewer.id) ?? 0;
+    const nextV = prevV + total;
+    this.viewerLikes.set(viewer.id, nextV);
+    const tntHits = Math.floor(nextV / 100) - Math.floor(prevV / 100);
+    if (tntHits > 0) {
+      this.entryFor(viewer).tnt += tntHits;
+      this.dropTnt(viewer, tntHits);
       this.audio.like();
-      this.toast(`♥ ${truncate(viewer.nickname, 12)} +${added} block${added > 1 ? "s" : ""}`, "#ff6fa8");
+      this.toast(`♥ ${truncate(viewer.nickname, 12)} 100 likes → ${tntHits} TNT`, "#ff8a65");
     }
+  }
+
+  handleFollow(viewer: Viewer, count = 2) {
+    if (count <= 0) return;
+    const who = truncate(viewer.nickname, 12);
+    this.toast(`➕ ${who} followed! → ${count} TNT`, "#38bdf8");
+    this.entryFor(viewer).tnt += count;
+    this.dropTnt(viewer, count);
+    this.react("tnt");
+  }
+
+  handleShare(viewer: Viewer, count = 2) {
+    if (count <= 0) return;
+    const who = truncate(viewer.nickname, 12);
+    this.toast(`📢 ${who} shared LIVE! → ${count} TNT`, "#a78bfa");
+    this.entryFor(viewer).tnt += count;
+    this.dropTnt(viewer, count);
+    this.react("tnt");
   }
 
   /** Big centred announcement (like goal reached, etc.). */
@@ -574,9 +818,17 @@ export class TntBoxEngine {
     this.tapped = null;
   }
 
-  /** True while the streamer is steering (or recently was). */
+  /** True while the streamer is steering manually. */
   isManual(): boolean {
-    return this.held.length > 0 || this.tapped !== null || this.time - this.lastInput < AUTO_RESUME || !this.settings.idleAutoWalk;
+    if (this.settings.autoPilot) {
+      return this.held.length > 0 || this.tapped !== null;
+    }
+    return (
+      this.held.length > 0 ||
+      this.tapped !== null ||
+      this.time - this.lastInput < AUTO_RESUME ||
+      !this.settings.idleAutoWalk
+    );
   }
 
   resetRound() {
@@ -590,6 +842,14 @@ export class TntBoxEngine {
     this.phase = "playing";
     this.wonTimer = 0;
     this.confetti = [];
+    this.autoAi = {
+      mode: "row",
+      dir: Math.random() < 0.5 ? "left" : "right",
+      stepsLeft: 12 + Math.floor(Math.random() * 8),
+      pillarRemaining: 0,
+      targetCol: 0,
+      pauseTimer: 0,
+    };
   }
 
   resetLeaderboard() {
@@ -605,7 +865,7 @@ export class TntBoxEngine {
   private entryFor(v: Viewer): LeaderEntry {
     let e = this.leaderboard.get(v.id);
     if (!e) {
-      e = { id: v.id, nickname: v.nickname, avatarUrl: v.avatarUrl, coins: 0, tnt: 0, blocks: 0 };
+      e = { id: v.id, nickname: v.nickname, avatarUrl: v.avatarUrl, coins: 0, tnt: 0, blocks: 0, gifts: 0 };
       this.leaderboard.set(v.id, e);
     } else {
       e.nickname = v.nickname;
@@ -614,6 +874,71 @@ export class TntBoxEngine {
     return e;
   }
 
+  // ----------------------------- builder chatter -----------------------------
+
+  /** Makes the builder say something. Hurt lines interrupt; idle chatter never cuts one off. */
+  private say(text: string, hurt = false) {
+    if (this.speech && !hurt && this.speech.hurt) return;
+    this.speech = { text, age: 0, life: hurt ? 2.4 : 3, hurt };
+  }
+
+  /** The builder's reaction when a viewer sends something against (or for) the streamer. */
+  private react(action: ActionKind) {
+    if (this.speech?.hurt && this.speech.age < 1.2) return; // don't spam
+    if (action === "tnt") this.say(pick(TNT_LINES), true);
+    else if (action === "dragon") this.say(pick(DRAGON_LINES), true);
+    else if (action === "clear") this.say(pick(CLEAR_LINES), true);
+    else if (action === "fill") this.say(pick(FILL_LINES));
+    else if (action === "win") this.say(pick(WIN_LINES));
+  }
+
+  private updateSpeech(dt: number) {
+    if (this.speech && (this.speech.age += dt) > this.speech.life) this.speech = null;
+    if (this.phase !== "playing") return;
+    this.chatCd -= dt;
+    if (this.chatCd <= 0) {
+      this.chatCd = 6 + Math.random() * 6;
+      if (!this.speech) this.say(pick(this.isFull() ? FULL_LINES : IDLE_LINES));
+    }
+  }
+
+  /** Speech bubble above the builder's head, projected through the 3-D camera. */
+  private drawSpeech(c: CanvasRenderingContext2D) {
+    const sp = this.speech;
+    const s3 = this.scene3d;
+    if (!sp || !s3) return;
+    const b = this.builder;
+    s3.toScreen(b.x, b.y - CELL * 2.2, -CELL / 2, this.pt);
+    const pop = easeOutBack(Math.min(1, sp.age / 0.2));
+    const fade = Math.min(1, (sp.life - sp.age) / 0.3);
+    c.save();
+    c.globalAlpha = Math.max(0, fade);
+    c.font = `34px ${FONT}`;
+    const tw = Math.min(520, c.measureText(sp.text).width);
+    const w = tw + 48;
+    const h = 66;
+    const left = this.viewLeft() + 10;
+    const right = this.viewRight() - 10;
+    const x = Math.max(left + w / 2, Math.min(right - w / 2, this.pt.x));
+    const y = this.pt.y;
+    c.translate(x, y);
+    c.scale(pop, pop);
+    c.fillStyle = "#ffffff";
+    c.strokeStyle = sp.hurt ? "#ef4444" : "#1f2937";
+    c.lineWidth = 5;
+    c.beginPath();
+    c.roundRect(-w / 2, -h - 14, w, h, 24);
+    c.moveTo(-14 + (this.pt.x - x) * 0.3, -14);
+    c.lineTo(this.pt.x - x, 6);
+    c.lineTo(14 + (this.pt.x - x) * 0.3, -14);
+    c.fill();
+    c.stroke();
+    c.fillStyle = sp.hurt ? "#b91c1c" : "#111827";
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.fillText(sp.text, 0, -h / 2 - 14 + 2, tw);
+    c.restore();
+  }
   private toast(text: string, color: string) {
     this.toasts.unshift({ text, color, age: 0 });
     if (this.toasts.length > 4) this.toasts.length = 4;
@@ -645,7 +970,7 @@ export class TntBoxEngine {
     if (h >= ROWS) return false;
     const row = ROWS - 1 - h;
     const restTop = BOX_Y + row * CELL;
-    this.grid[row * COLS + col] = { type: randomBlock(), fall: Math.max(0, restTop - fromTop), fallV: 0 };
+    this.grid[row * COLS + col] = { type: this.randomBlock(), fall: Math.max(0, restTop - fromTop), fallV: 0 };
     this.filled++;
     return true;
   }
@@ -761,6 +1086,13 @@ export class TntBoxEngine {
 
     if (b.stun > 0) return;
 
+    // Human micro-pause when autopilot is active (looking at chat / natural hesitation)
+    if (this.settings.autoPilot && this.autoAi.pauseTimer > 0 && !this.isManual()) {
+      this.autoAi.pauseTimer -= dt;
+      b.walkTime = 0;
+      return;
+    }
+
     if (b.step < 1) {
       b.step = Math.min(1, b.step + dt / b.stepDur);
       b.walkTime += dt;
@@ -850,31 +1182,266 @@ export class TntBoxEngine {
     return true;
   }
 
-  /** Autopilot: head for the lowest column (bottom first), building up whenever a wall is in the way. */
-  private autoStep(b: Builder) {
-    const dur = Math.max(0.05, this.settings.buildInterval);
-    let target = b.col;
-    let best = this.height(b.col);
+  /**
+   * Human-like Autopilot AI:
+   * Alternates between sweeping rows horizontally ("pa-row"), towering up vertically ("pa-column"),
+   * repairing craters from TNT explosions, and organic maneuvers with micro-pauses and bunny-hops.
+   */
+  private pickNextAiMode(b: Builder) {
+    // 1. Check for deep craters (craters left by TNT)
+    let minH = ROWS;
+    let minCol = b.col;
+    let maxH = 0;
     for (let c = 0; c < COLS; c++) {
       const h = this.height(c);
-      if (h < best || (h === best && Math.abs(c - b.col) < Math.abs(target - b.col))) {
-        best = h;
-        target = c;
+      if (h < minH) {
+        minH = h;
+        minCol = c;
+      }
+      if (h > maxH) maxH = h;
+    }
+
+    const hasCrater = maxH - minH >= 3 && minH < ROWS;
+    const roll = Math.random();
+
+    // 2. Crater repair if a deep hole exists
+    if (hasCrater && roll < 0.35) {
+      this.autoAi.mode = "crater";
+      this.autoAi.targetCol = minCol;
+      this.autoAi.stepsLeft = Math.abs(minCol - b.col) + 4;
+      return;
+    }
+
+    // 3. Alternate between pa-row and pa-column like a human
+    const prevMode = this.autoAi.mode;
+
+    if (prevMode === "row") {
+      // Finished a row sweep:
+      // ~55% chance: Switch to pa-column (tower/pillar up)
+      // ~30% chance: Sweep another row in the opposite direction
+      // ~15% chance: Wander / casual moves
+      if (roll < 0.55) {
+        this.autoAi.mode = "column";
+        this.autoAi.pillarRemaining = 2 + Math.floor(Math.random() * 3); // 2 to 4 blocks
+      } else if (roll < 0.85) {
+        this.autoAi.mode = "row";
+        this.autoAi.dir = this.autoAi.dir === "left" ? "right" : "left";
+        this.autoAi.stepsLeft = 10 + Math.floor(Math.random() * 12);
+      } else {
+        this.autoAi.mode = "wander";
+        this.autoAi.dir = Math.random() < 0.5 ? "left" : "right";
+        this.autoAi.stepsLeft = 3 + Math.floor(Math.random() * 5);
+      }
+    } else if (prevMode === "column") {
+      // Finished pillaring a column:
+      // ~70% chance: Switch to pa-row (sweep horizontally from here)
+      // ~18% chance: Step to adjacent column and pillar again
+      // ~12% chance: Wander
+      if (roll < 0.7) {
+        this.autoAi.mode = "row";
+        const leftH = b.col > 0 ? this.height(b.col - 1) : ROWS;
+        const rightH = b.col < COLS - 1 ? this.height(b.col + 1) : ROWS;
+        if (leftH < rightH) this.autoAi.dir = "left";
+        else if (rightH < leftH) this.autoAi.dir = "right";
+        else this.autoAi.dir = b.col > COLS / 2 ? "left" : "right";
+        this.autoAi.stepsLeft = 10 + Math.floor(Math.random() * 12);
+      } else if (roll < 0.88) {
+        this.autoAi.mode = "column";
+        this.autoAi.pillarRemaining = 2 + Math.floor(Math.random() * 3);
+        const stepDir = Math.random() < 0.5 ? "left" : "right";
+        this.tryWalk(b, stepDir, Math.max(0.05, this.settings.buildInterval));
+      } else {
+        this.autoAi.mode = "wander";
+        this.autoAi.dir = Math.random() < 0.5 ? "left" : "right";
+        this.autoAi.stepsLeft = 3 + Math.floor(Math.random() * 4);
+      }
+    } else {
+      // Default from crater / wander
+      if (roll < 0.55) {
+        this.autoAi.mode = "row";
+        this.autoAi.dir = Math.random() < 0.5 ? "left" : "right";
+        this.autoAi.stepsLeft = 10 + Math.floor(Math.random() * 12);
+      } else if (roll < 0.9) {
+        this.autoAi.mode = "column";
+        this.autoAi.pillarRemaining = 2 + Math.floor(Math.random() * 3);
+      } else {
+        this.autoAi.mode = "wander";
+        this.autoAi.dir = Math.random() < 0.5 ? "left" : "right";
+        this.autoAi.stepsLeft = 4 + Math.floor(Math.random() * 4);
+      }
+    }
+  }
+
+  private autoStep(b: Builder) {
+    if (this.isFull()) return;
+    const baseDur = Math.max(0.05, this.settings.buildInterval);
+    // Organic human timing variation (+/- 15%)
+    const dur = baseDur * (0.85 + Math.random() * 0.3);
+
+    // 1. TNT Evasion: Panic and flee from falling TNT with low fuse!
+    const nearTnt = this.tnts.find(
+      (t) => Math.abs(t.x - b.x) < CELL * 1.8 && t.y > b.y - CELL * 5 && t.fuse < 2.0
+    );
+    if (nearTnt) {
+      const fleeDir: "left" | "right" = nearTnt.x < b.x ? "right" : "left";
+      const altDir: "left" | "right" = fleeDir === "left" ? "right" : "left";
+      // Panic sprint: faster step duration
+      if (this.tryWalk(b, fleeDir, dur * 0.65) || this.tryWalk(b, altDir, dur * 0.65)) {
+        return;
+      }
+      if (this.height(b.col) > 0 && Math.random() < 0.5) {
+        this.jump(b);
+        return;
       }
     }
 
-    if (target === b.col) {
-      // Standing on a lowest column: keep sweeping sideways, turning at walls.
-      const back = b.dir === "left" ? "right" : "left";
-      if (this.tryWalk(b, b.dir, dur) || this.tryWalk(b, back, dur)) return;
-    } else if (this.tryWalk(b, target < b.col ? "left" : "right", dur)) {
+    // 2. Micro-pause check (human hesitation / looking at chat)
+    if (Math.random() < 0.04) {
+      this.autoAi.pauseTimer = 0.12 + Math.random() * 0.16;
       return;
     }
-    if (this.buildUnder(b)) {
+
+    // 3. Check if current mode finished or needs to transition
+    if (this.autoAi.mode === "column") {
+      if (this.autoAi.pillarRemaining <= 0 || this.height(b.col) >= ROWS) {
+        this.pickNextAiMode(b);
+      }
+    } else {
+      if (this.autoAi.stepsLeft <= 0) {
+        this.pickNextAiMode(b);
+      }
+    }
+
+    // 4. Execute mode:
+    if (this.autoAi.mode === "column") {
+      // --- "PA-COLUMN" MODE: Pillar vertically like a tower in Minecraft ---
+      if (this.height(b.col) < ROWS) {
+        if (this.buildUnder(b)) {
+          b.step = 0;
+          b.fromX = b.x;
+          b.fromCol = b.col;
+          b.stepDur = dur;
+          this.autoAi.pillarRemaining--;
+          // Human gamer habit: 35% chance to jump while towering
+          if (Math.random() < 0.35) {
+            this.jump(b);
+          }
+          return;
+        }
+      }
+      // If column is already full or failed, pick next mode
+      this.pickNextAiMode(b);
+    }
+
+    if (this.autoAi.mode === "crater") {
+      // --- CRATER REPAIR: Head toward deep hole left by TNT ---
+      const target = this.autoAi.targetCol;
+      if (target === b.col) {
+        if (this.height(b.col) < ROWS && this.buildUnder(b)) {
+          b.step = 0;
+          b.fromX = b.x;
+          b.fromCol = b.col;
+          b.stepDur = dur;
+          this.autoAi.stepsLeft--;
+          return;
+        }
+        this.pickNextAiMode(b);
+        return;
+      } else {
+        const stepDir: "left" | "right" = target < b.col ? "left" : "right";
+        if (this.tryWalk(b, stepDir, dur)) {
+          this.autoAi.stepsLeft--;
+          if (Math.random() < 0.15) this.jump(b);
+          return;
+        }
+        if (this.height(b.col) < ROWS && this.buildUnder(b)) {
+          b.step = 0;
+          b.fromX = b.x;
+          b.fromCol = b.col;
+          b.stepDur = dur;
+          return;
+        }
+      }
+    }
+
+    if (this.autoAi.mode === "wander") {
+      // --- CASUAL HUMAN WANDER / ZIG-ZAG ---
+      if (Math.random() < 0.15) {
+        this.autoAi.dir = this.autoAi.dir === "left" ? "right" : "left";
+      }
+      if (this.tryWalk(b, this.autoAi.dir, dur)) {
+        this.autoAi.stepsLeft--;
+        if (Math.random() < 0.2) this.jump(b);
+        return;
+      }
+      if (this.height(b.col) < ROWS && Math.random() < 0.5 && this.buildUnder(b)) {
+        b.step = 0;
+        b.fromX = b.x;
+        b.fromCol = b.col;
+        b.stepDur = dur;
+        return;
+      }
+      this.autoAi.dir = this.autoAi.dir === "left" ? "right" : "left";
+      this.autoAi.stepsLeft--;
+      return;
+    }
+
+    // --- "PA-ROW" MODE: Sweep horizontally to build full rows across ---
+    let dir = this.autoAi.dir;
+    const nextCol = b.col + (dir === "left" ? -1 : 1);
+
+    // Boundary check: at the wall/border of the box
+    if (nextCol < 0 || nextCol >= COLS) {
+      this.autoAi.dir = dir === "left" ? "right" : "left";
+      // At the wall: 40% chance to pillar up the wall before heading back!
+      if (Math.random() < 0.4 && this.height(b.col) < ROWS) {
+        this.autoAi.mode = "column";
+        this.autoAi.pillarRemaining = 1 + Math.floor(Math.random() * 3);
+        if (this.buildUnder(b)) {
+          b.step = 0;
+          b.fromX = b.x;
+          b.fromCol = b.col;
+          b.stepDur = dur;
+          return;
+        }
+      }
+      dir = this.autoAi.dir;
+    }
+
+    // Step across in current sweep direction
+    if (this.tryWalk(b, dir, dur)) {
+      this.autoAi.stepsLeft--;
+      // Human bunny hop: 12% chance
+      if (Math.random() < 0.12) {
+        this.jump(b);
+      }
+      // 5% chance of human changing mind and turning mid-sweep
+      if (Math.random() < 0.05) {
+        this.autoAi.dir = dir === "left" ? "right" : "left";
+      }
+      return;
+    }
+
+    // If blocked by a taller wall: pillar up under feet so we can climb it!
+    if (this.height(b.col) < ROWS && this.buildUnder(b)) {
       b.step = 0;
       b.fromX = b.x;
       b.fromCol = b.col;
-      b.stepDur = dur; // pause like a step so it builds at walking pace
+      b.stepDur = dur;
+      return;
+    }
+
+    // If blocked, try opposite direction
+    const oppDir: "left" | "right" = dir === "left" ? "right" : "left";
+    if (this.tryWalk(b, oppDir, dur)) {
+      this.autoAi.dir = oppDir;
+      this.autoAi.stepsLeft--;
+      return;
+    }
+
+    // Stuck check: hop
+    if (Math.random() < 0.3) {
+      this.jump(b);
     }
   }
 
@@ -898,11 +1465,20 @@ export class TntBoxEngine {
   }
 
   private addParticle(p: Particle) {
-    if (this.particles.length < MAX_PARTICLES) this.particles.push(p);
+    const max =
+      this.settings.graphicsQuality === "low"
+        ? 60
+        : this.settings.graphicsQuality === "medium"
+          ? 180
+          : MAX_PARTICLES;
+    if (this.particles.length < max) this.particles.push(p);
   }
 
   private update(dt: number) {
     this.time += dt;
+
+    const isUrgent = this.isFull() && this.phase === "playing" && this.timeLeft <= 10;
+    this.audio.setUrgentBgm(isUrgent);
 
     if (this.phase === "won") {
       this.wonTimer -= dt;
@@ -915,17 +1491,28 @@ export class TntBoxEngine {
       this.updateCells(dt);
       this.updateBuilder(dt);
 
-      // Timer only ticks while the box is 100% full
+      // Timer only ticks while the box is 100% full and not paused by gift/TNT
+      const tntActive =
+        this.tnts.length > 0 ||
+        this.spawnQueue.length > 0 ||
+        this.dragon !== null ||
+        this.dragonQueue.length > 0 ||
+        this.time < this.giftPauseUntil;
+
       if (this.isFull()) {
-        this.timeLeft -= dt * this.countdownRate();
-        const shown = Math.ceil(this.timeLeft);
-        if (shown !== this.lastShownSecond) {
-          this.lastShownSecond = shown;
-          if (shown >= 1 && shown <= SLOW_FROM) this.audio.tick((SLOW_FROM - shown) / Math.max(1, SLOW_FROM - 1));
+        if (!tntActive) {
+          this.timeLeft -= dt * this.countdownRate();
+          const shown = Math.ceil(this.timeLeft);
+          if (shown !== this.lastShownSecond) {
+            this.lastShownSecond = shown;
+            if (shown >= 1 && shown <= SLOW_FROM) this.audio.tick((SLOW_FROM - shown) / Math.max(1, SLOW_FROM - 1));
+          }
+          if (this.timeLeft <= 0) this.win();
         }
-        if (this.timeLeft <= 0) this.win();
-      } else if (this.settings.resetTimerOnDamage) {
+      } else {
+        // Box is no longer full (TNT broke a block): the countdown always restarts from the full duration.
         this.timeLeft = this.settings.timerDuration;
+        this.lastShownSecond = -1;
       }
 
       // Spawn queued TNT, staggered
@@ -951,6 +1538,7 @@ export class TntBoxEngine {
     for (const r of this.rings) r.age += dt;
     this.rings = this.rings.filter((r) => r.age < 0.4);
     if (this.banner && (this.banner.age += dt) > 3.2) this.banner = null;
+    this.updateSpeech(dt);
     for (const t of this.toasts) t.age += dt;
     this.toasts = this.toasts.filter((t) => t.age < TOAST_LIFE);
     this.shake *= Math.exp(-dt * 7);
@@ -984,90 +1572,123 @@ export class TntBoxEngine {
     if (!this.dragon) {
       const viewer = this.dragonQueue.shift();
       if (!viewer) return;
-      let top = BOX_Y + BOX_H;
-      for (let col = 0; col < COLS; col++) top = Math.min(top, this.surfaceY(col));
+      let tallest = 0;
+      for (let col = 0; col < COLS; col++) tallest = Math.max(tallest, this.height(col));
+      this.dragonTopRow = Math.min(ROWS - 1, ROWS - tallest);
+      const top = BOX_Y + this.dragonTopRow * CELL;
       const dir = Math.random() < 0.5 ? 1 : -1;
       this.dragon = {
         x: dir > 0 ? BOX_X - DRAGON_MARGIN : BOX_X + BOX_W + DRAGON_MARGIN,
-        y: Math.max(BOX_Y + CELL, top) - CELL * 0.9,
+        y: top + CELL * 0.3,
         dir,
         t: 0,
         lastCol: -1,
         viewer,
+        burnCol: -1,
+        burnLeft: 0,
       };
       this.audio.fanfare();
     }
     const d = this.dragon;
     d.t += dt;
-    d.x += d.dir * DRAGON_SPEED * dt;
     d.y += Math.sin(d.t * 4) * 18 * dt; // gentle bob
 
-    // Fire breath
-    for (let i = 0; i < 3; i++) {
-      this.addParticle({
-        kind: i === 0 ? "smoke" : "spark",
-        x: d.x + d.dir * CELL * 1.4,
-        y: d.y + CELL * 0.5,
-        vx: d.dir * (200 + Math.random() * 200),
-        vy: 300 + Math.random() * 300,
-        life: 0.45,
-        maxLife: 0.45,
-        size: i === 0 ? 34 : 10,
-        color: Math.random() < 0.5 ? "#ffb347" : "#ff5a2b",
-        gravity: 200,
-        rot: 0,
-        vr: 0,
-      });
-    }
-
-    // Burn the top block of each column as it passes overhead.
-    if (d.x >= BOX_X && d.x < BOX_X + BOX_W) {
-      const col = this.colAt(d.x);
-      if (col !== d.lastCol) {
-        d.lastCol = col;
-        const h = this.height(col);
-        if (h > 0) {
-          const row = ROWS - h;
-          const cell = this.grid[row * COLS + col];
-          this.grid[row * COLS + col] = null;
-          this.filled--;
-          this.entryFor(d.viewer).blocks++;
-          const bx = BOX_X + col * CELL + CELL / 2;
-          const by = BOX_Y + row * CELL + CELL / 2;
-          const colors = cell ? BLOCK_PARTICLE_COLORS[cell.type] : ["#ffb347"];
-          for (let i = 0; i < 6; i++) {
-            this.addParticle({
-              kind: "debris",
-              x: bx + (Math.random() - 0.5) * CELL * 0.7,
-              y: by + (Math.random() - 0.5) * CELL * 0.7,
-              z: -CELL * 0.5,
-              vx: (Math.random() - 0.5) * 600,
-              vy: -300 - Math.random() * 500,
-              vz: Math.random() * 600,
-              life: 1,
-              maxLife: 1.3,
-              size: 14,
-              color: colors[Math.floor(Math.random() * colors.length)],
-              gravity: 2400,
-              rot: Math.random() * 6,
-              vr: (Math.random() - 0.5) * 14,
-            });
-          }
-          this.audio.explosion(0.35);
-          const b = this.builder;
-          if (!b.flung && b.col === col) {
-            b.flung = true;
-            b.vx = d.dir * 420;
-            b.vy = -800;
-            b.stun = 1.2;
-            b.step = 1;
-            b.fromCol = b.col;
+    if (d.burnCol >= 0) {
+      // Hover and breathe: the painted fireball lands on the column's blocks.
+      d.burnLeft -= dt;
+      const bx = BOX_X + d.burnCol * CELL + CELL / 2;
+      const blockTop = BOX_Y + this.dragonTopRow * CELL;
+      for (let i = 0; i < 4; i++) {
+        // Flames licking the blocks being burnt.
+        this.addParticle({
+          kind: "spark",
+          x: bx + (Math.random() - 0.5) * CELL * 0.8,
+          y: blockTop + Math.random() * CELL * 0.8,
+          vx: (Math.random() - 0.5) * 160,
+          vy: -150 - Math.random() * 350,
+          life: 0.4,
+          maxLife: 0.4,
+          size: 16,
+          color: Math.random() < 0.5 ? "#ffd166" : "#ff4d1a",
+          gravity: 200,
+          rot: 0,
+          vr: 0,
+        });
+      }
+      if (d.burnLeft <= 0) {
+        const col = d.burnCol;
+        d.burnCol = -1;
+        this.burnColumn(d, col);
+      }
+    } else {
+      d.x += d.dir * DRAGON_SPEED * dt;
+      // Stop over each column that has blocks in the burn band, and breathe on it.
+      if (d.x >= BOX_X && d.x < BOX_X + BOX_W) {
+        const col = this.colAt(d.x);
+        if (col !== d.lastCol) {
+          d.lastCol = col;
+          const h = this.height(col);
+          if (h > 0 && ROWS - h < this.dragonTopRow + 4) {
+            d.x = BOX_X + col * CELL + CELL / 2;
+            d.burnCol = col;
+            d.burnLeft = 0.5;
           }
         }
       }
     }
     const out = d.dir > 0 ? d.x > BOX_X + BOX_W + DRAGON_MARGIN : d.x < BOX_X - DRAGON_MARGIN;
     if (out) this.dragon = null;
+  }
+
+  /** The dragon's fire has finished on a column: its top 4-row band explodes. */
+  private burnColumn(d: Dragon, col: number) {
+    const h = this.height(col);
+    if (h > 0 && ROWS - h < this.dragonTopRow + 4) {
+    const burnFrom = Math.max(0, ROWS - h - this.dragonTopRow);
+    const burn = Math.min(4, ROWS - this.dragonTopRow);
+    for (let k = burnFrom; k < burn; k++) {
+      const row = this.dragonTopRow + k;
+      const cell = this.grid[row * COLS + col];
+      this.grid[row * COLS + col] = null;
+      this.filled--;
+      this.entryFor(d.viewer).blocks++;
+      const bx = BOX_X + col * CELL + CELL / 2;
+      const by = BOX_Y + row * CELL + CELL / 2;
+      const colors = cell ? BLOCK_PARTICLE_COLORS[cell.type] : ["#ffb347"];
+      for (let i = 0; i < 8; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const spd = 400 + Math.random() * 700;
+        this.addParticle({
+          kind: i < 2 ? "smoke" : "debris",
+          x: bx + (Math.random() - 0.5) * CELL * 0.7,
+          y: by + (Math.random() - 0.5) * CELL * 0.7,
+          z: -CELL * 0.5,
+          vx: Math.cos(ang) * spd,
+          vy: Math.sin(ang) * spd - 400,
+          vz: Math.random() * 900,
+          life: 1,
+          maxLife: 1.3,
+          size: i < 2 ? 40 : 14,
+          color: i < 2 ? "#ff7a2b" : colors[Math.floor(Math.random() * colors.length)],
+          gravity: 2400,
+          rot: Math.random() * 6,
+          vr: (Math.random() - 0.5) * 14,
+        });
+      }
+    }
+    this.shake = Math.max(this.shake, 8);
+    this.audio.explosion(0.6);
+    const b = this.builder;
+    if (!b.flung && b.col === col) {
+      b.flung = true;
+      this.say(pick(HIT_LINES), true);
+      b.vx = d.dir * 420;
+      b.vy = -800;
+      b.stun = 1.2;
+      b.step = 1;
+      b.fromCol = b.col;
+    }
+    }
   }
 
   /** Real-time speed of the HOLD countdown (1 = normal), slowing over the last seconds. */
@@ -1243,6 +1864,7 @@ export class TntBoxEngine {
     if (bd <= BLAST_RADIUS * 1.2) {
       const side = b.x === cx ? (Math.random() < 0.5 ? -1 : 1) : Math.sign(b.x - cx);
       b.flung = true;
+      this.say(pick(HIT_LINES), true);
       b.vx = side * (300 + Math.random() * 300);
       b.vy = -950;
       b.stun = 1.4;
@@ -1393,28 +2015,32 @@ export class TntBoxEngine {
   // ───────────────────────────── rendering ─────────────────────────────
 
   /**
-   * Draws public/background.png to cover the whole window, with its grass line
-   * at the game's ground height (game y = BG_GROUND_Y). Returns false until it has loaded.
+   * Draws a background image to cover the canvas viewport. Returns false until loaded.
    */
-  private drawBackgroundImage(bg: CanvasRenderingContext2D): boolean {
-    if (!this.bgImg && typeof Image !== "undefined") {
-      this.bgImg = new Image();
-      this.bgImg.src = BG_IMAGE_URL;
+  private drawBgImage(bg: CanvasRenderingContext2D, url: string): boolean {
+    let img = this.bgImages.get(url);
+    if (!img && typeof Image !== "undefined") {
+      img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = url;
+      img.onload = () => {
+        this.bgKey = ""; // repaint once loaded
+      };
+      this.bgImages.set(url, img);
     }
-    const img = this.bgImg;
     if (!img || !img.complete || img.naturalWidth === 0) return false;
     const vw = bg.canvas.width;
     const vh = bg.canvas.height;
-    const key = `${vw}x${vh}`;
-    if (key === this.bgImgKey) return true;
-    this.bgImgKey = key;
+    const key = `${url}@${vw}x${vh}`;
+    if (key === this.bgKey) return true;
+    this.bgKey = key;
     const s = Math.max(vw / img.naturalWidth, vh / img.naturalHeight);
     const dw = img.naturalWidth * s;
     const dh = img.naturalHeight * s;
     const dx = (vw - dw) / 2;
-    // Line the picture's ground up with the game's, but never leave a gap at the top or bottom.
     const dy = Math.min(0, Math.max(vh - dh, this.offY + BG_GROUND_Y - BG_GROUND_FRAC * dh));
-    bg.imageSmoothingEnabled = false; // pixel art: keep it crisp when scaled up
+    bg.imageSmoothingEnabled = true;
+    bg.imageSmoothingQuality = "high";
     bg.fillStyle = "#000";
     bg.fillRect(0, 0, vw, vh);
     bg.drawImage(img, dx, dy, dw, dh);
@@ -1427,10 +2053,27 @@ export class TntBoxEngine {
     if (!c || !bg || !this.backdrop) return;
 
     bg.setTransform(1, 0, 0, 1, 0, 0);
-    // The painted sky scenery scrolls with the camera; public/background.png is static, so it is only
-    // used when USE_BG_IMAGE is on.
-    // With WebGL the 3-D landscape (in Scene3D) is the scenery; the painted 2-D one is only a fallback.
-    if (!this.scene3d && !(USE_BG_IMAGE && this.drawBackgroundImage(bg))) this.backdrop.draw(bg, this.time, this.scroll, this.scrollX);
+
+    const bgKind = this.settings.background || "purple_night";
+    const show3d = bgKind === "landscape_3d";
+
+    if (show3d) {
+      if (this.bgKey !== "landscape_3d") {
+        bg.clearRect(0, 0, bg.canvas.width, bg.canvas.height);
+        this.bgKey = "landscape_3d";
+      }
+    } else if (bgKind === "pixel_art") {
+      this.bgKey = "pixel_art";
+      this.backdrop.draw(bg, this.time, this.scroll, this.scrollX);
+    } else {
+      let url = "/backgrounds/purple_night.jpg";
+      if (bgKind === "classic_night") {
+        url = "/background.png";
+      } else if (bgKind === "custom" && this.settings.customBackgroundUrl) {
+        url = this.settings.customBackgroundUrl;
+      }
+      this.drawBgImage(bg, url);
+    }
 
     const shakeX = this.shake > 0 ? (Math.random() * 2 - 1) * this.shake : 0;
     const shakeY = this.shake > 0 ? (Math.random() * 2 - 1) * this.shake : 0;
@@ -1447,12 +2090,14 @@ export class TntBoxEngine {
       scroll: this.scroll,
       scrollX: this.scrollX,
       dragon: this.dragon,
+      show3dLandscape: show3d,
     });
 
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.clearRect(0, 0, this.canvas!.width, this.canvas!.height);
     c.translate(this.offX, this.offY);
     this.drawTntTags(c);
+    this.drawSpeech(c);
     this.drawHud(c);
     if (this.settings.showGiftList) this.drawGiftList(c);
     this.drawToasts(c);
@@ -1579,9 +2224,11 @@ export class TntBoxEngine {
   private panel(x: number, y: number, w: number, h: number, r: number, accent = "#e9b949") {
     const c = this.ctx!;
     c.save();
-    c.shadowColor = "rgba(0,0,0,0.45)";
-    c.shadowBlur = 18;
-    c.shadowOffsetY = 6;
+    if (this.settings.graphicsQuality !== "low") {
+      c.shadowColor = "rgba(0,0,0,0.45)";
+      c.shadowBlur = 18;
+      c.shadowOffsetY = 6;
+    }
     const g = c.createLinearGradient(0, y, 0, y + h);
     g.addColorStop(0, "rgba(32,44,72,0.9)");
     g.addColorStop(1, "rgba(12,18,34,0.9)");
@@ -1773,22 +2420,38 @@ export class TntBoxEngine {
     this.text(`${this.filled} / ${total}`, bx + 102, by + 60, 38, "#ffffff", "left", 8);
     this.bar(bx + 102, by + 80, bw - 126, 8, this.filled / total, full ? "#22c55e" : "#22d3ee", full ? "#bbf7d0" : "#a5f3fc");
 
+    // Real-time FPS counter badge (when enabled in settings)
+    if (s.showFps) {
+      const R = this.viewRight();
+      const fpsText = `${this.fps} FPS`;
+      const fpsColor = this.fps >= 50 ? "#4ade80" : this.fps >= 28 ? "#fbbf24" : "#f87171";
+      this.panel(R - 146, 20, 126, 42, 14, fpsColor);
+      this.text(fpsText, R - 83, 41, 20, fpsColor, "center", 4);
+    }
+
     if (full) this.drawHoldRing(c);
   }
 
   /** Circular countdown in the middle while the box is full; the last seconds get big and red. */
   private drawHoldRing(c: CanvasRenderingContext2D) {
+    const tntActive =
+      this.tnts.length > 0 ||
+      this.spawnQueue.length > 0 ||
+      this.dragon !== null ||
+      this.dragonQueue.length > 0 ||
+      this.time < this.giftPauseUntil;
     const urgent = this.timeLeft <= 10;
     const final = this.timeLeft <= SLOW_FROM;
     const beat = Math.pow(this.timeLeft % 1, 3);
     const pop = final ? 1 + 0.4 * beat : urgent ? 1 + 0.12 * beat : 1;
     const R = 112;
     const frac = Math.max(0, this.timeLeft / Math.max(1, this.settings.timerDuration));
-    const col = urgent ? "#ff4d4d" : "#4ade80";
+    const col = tntActive ? "#f59e0b" : urgent ? "#ff4d4d" : "#4ade80";
     c.save();
-    c.translate(W * 0.6, 600);
+    // Lowered slightly (720px instead of 600px) as requested
+    c.translate(W * 0.6, 720);
     c.scale(pop, pop);
-    c.fillStyle = "rgba(10,15,30,0.6)";
+    c.fillStyle = "rgba(10,15,30,0.65)";
     c.beginPath();
     c.arc(0, 0, R, 0, Math.PI * 2);
     c.fill();
@@ -1799,14 +2462,24 @@ export class TntBoxEngine {
     c.stroke();
     c.strokeStyle = col;
     c.lineCap = "round";
-    c.shadowColor = col;
-    c.shadowBlur = 20;
+    if (this.settings.graphicsQuality !== "low") {
+      c.shadowColor = col;
+      c.shadowBlur = 20;
+    }
     c.beginPath();
     c.arc(0, 0, R - 10, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac);
     c.stroke();
     c.shadowBlur = 0;
     c.lineCap = "butt";
-    if (final) {
+    if (tntActive) {
+      if (final) {
+        this.text(String(Math.max(1, Math.ceil(this.timeLeft))), 0, -6, 115, "#fbbf24", "center", 14);
+        this.text("TNT PAUSED!", 0, 52, 22, "#fde68a", "center", 6);
+      } else {
+        this.text("PAUSED", 0, -38, 24, "#fde68a", "center", 6);
+        this.text(formatTime(this.timeLeft), 0, 14, 60, "#fbbf24", "center", 10);
+      }
+    } else if (final) {
       this.text(String(Math.max(1, Math.ceil(this.timeLeft))), 0, 6, 130, "#ff4d4d", "center", 14);
     } else {
       this.text("HOLD", 0, -40, 28, "#e2e8f0", "center", 6);
@@ -1819,41 +2492,45 @@ export class TntBoxEngine {
   private drawGiftList(c: CanvasRenderingContext2D) {
     const list = this.settings.giftActions;
     if (!list.length) return;
-    const rowH = 70;
-    const w = 380;
+    const rowH = 118;
+    const w = 560;
     const x0 = this.viewRight() - w - 20;
     const y0 = 20;
-    const head = 54;
+    const head = 70;
     const h = head + list.length * rowH + 14;
-    this.panel(x0, y0, w, h, 26);
-    this.text("🎁", x0 + 30, y0 + 30, 26, "#fff", "center", 0);
-    this.text("SEND A GIFT", x0 + 54, y0 + 30, 26, "#ffd76a", "left", 6);
+    this.panel(x0, y0, w, h, 30);
+    this.text("??", x0 + 38, y0 + 38, 36, "#fff", "center", 0);
+    this.text("SEND A GIFT", x0 + 72, y0 + 38, 38, "#ffd76a", "left", 8);
     c.fillStyle = "rgba(255,255,255,0.12)";
     c.fillRect(x0 + 18, y0 + head, w - 36, 2);
 
-    list.forEach((g, i) => {
-      const cy = y0 + head + 8 + i * rowH + rowH / 2;
-      // Picture slot
-      const sx = x0 + 18;
+    const slot = (sx: number, cy: number, url: string | undefined, size: number) => {
       c.fillStyle = "rgba(255,255,255,0.08)";
       c.beginPath();
-      c.roundRect(sx, cy - 28, 56, 56, 14);
+      c.roundRect(sx, cy - size / 2, size, size, 16);
       c.fill();
-      const url = g.imageUrl || this.giftImages.get(g.giftName.trim().toLowerCase());
       const img = this.avatars.get(url);
       if (img) {
         c.imageSmoothingEnabled = true;
-        c.drawImage(img, sx + 4, cy - 24, 48, 48);
+        c.drawImage(img, sx + 5, cy - size / 2 + 5, size - 10, size - 10);
       } else {
-        c.font = "34px system-ui, sans-serif";
-        c.fillStyle = "#ffffff"; // emoji ignore the colour but not its alpha
+        c.font = "44px system-ui, sans-serif";
+        c.fillStyle = "#ffffff";
         c.textAlign = "center";
         c.textBaseline = "middle";
-        c.fillText("🎁", sx + 28, cy + 2);
+        c.fillText("??", sx + size / 2, cy + 2);
       }
-      // Label
-      this.text(truncate(g.label.toUpperCase(), 12), sx + 72, cy + 2, 28, "#ffffff", "left", 6);
-      // Action chip
+    };
+
+    list.forEach((g, i) => {
+      const cy = y0 + head + 8 + i * rowH + rowH / 2;
+      const icons = GIFT_ICONS[g.id];
+      const sx = x0 + 16;
+      // Gift picture, arrow, result picture
+      slot(sx, cy, g.imageUrl || icons?.gift || this.giftImages.get(g.giftName.trim().toLowerCase()), 96);
+      this.text("?", sx + 96 + 22, cy + 2, 34, "#ffffff", "center", 4);
+      slot(sx + 96 + 44, cy, icons?.result, 96);
+      // Action chip (top) and label
       const chip =
         g.action === "tnt"
           ? `${g.amount} TNT`
@@ -1864,17 +2541,17 @@ export class TntBoxEngine {
               : g.action === "clear"
                 ? "BOOM"
                 : "FILL";
-      c.font = `20px ${FONT}`;
-      const cw = c.measureText(chip).width + 22;
-      const cx = x0 + w - 18 - cw;
+      const tx = sx + 96 + 44 + 96 + 18;
+      this.text(truncate(g.label.toUpperCase(), 10), tx, cy - 18, 32, "#ffffff", "left", 6);
+      c.font = `22px ${FONT}`;
+      const cw = c.measureText(chip).width + 24;
       c.fillStyle = ACTION_COLORS[g.action];
       c.beginPath();
-      c.roundRect(cx, cy - 16, cw, 32, 16);
+      c.roundRect(tx, cy + 6, cw, 34, 17);
       c.fill();
-      this.text(chip, cx + cw / 2, cy + 1, 20, "#ffffff", "center", 0);
+      this.text(chip, tx + cw / 2, cy + 24, 22, "#ffffff", "center", 0);
     });
   }
-
   /** Big announcement in the middle (like goal reached). */
   private drawBanner(c: CanvasRenderingContext2D) {
     const b = this.banner;
@@ -1921,37 +2598,125 @@ export class TntBoxEngine {
     });
   }
 
-  /** Bottom-left card: rank medals, avatars and blocks destroyed. */
+  /** Bottom-left card: Big prominent Top Destroyer leaderboard for live stream donors. */
   private drawLeaderboard(c: CanvasRenderingContext2D) {
     const x0 = this.viewLeft() + 20;
-    const w = 300;
+    const w = 440;
+    const h = 430;
     const bottom = this.viewBottom();
-    const y0 = bottom - (H - LEADERBOARD_Y);
-    const h = bottom - y0 - 60; // leave room for the connection badge
-    this.panel(x0, y0, w, h, 22, "#ff8a65");
-    this.text("💥", x0 + 26, y0 + 28, 22, "#fff", "center", 0);
-    this.text("TOP DESTROYERS", x0 + 46, y0 + 28, 22, "#ffd76a", "left", 5);
+    const y0 = bottom - h - 52; // leaves room for the connection badge at bottom: 12px
 
-    const entries = [...this.leaderboard.values()]
-      .sort((a, b) => b.blocks - a.blocks || b.coins - a.coins)
-      .slice(0, Math.max(1, Math.floor((h - 60) / 40)));
+    // Main Card Glass Panel with warm golden/coral accent
+    this.panel(x0, y0, w, h, 26, "#ff8a65");
 
-    if (entries.length === 0) {
-      this.text("Send gifts to drop TNT!", x0 + w / 2, y0 + 96, 20, "#cbd5e1", "center", 0);
+    // Header: Fire icon + Big Title + Subtitle
+    this.text("💥", x0 + 44, y0 + 40, 32, "#fff", "center", 0);
+    this.text("TOP DESTROYERS", x0 + 74, y0 + 32, 28, "#ffd76a", "left", 6);
+    this.text("👑 LIVE DONORS & DAMAGE", x0 + 74, y0 + 56, 16, "#ff8a65", "left", 0);
+
+    // Header divider line
+    c.fillStyle = "rgba(255,255,255,0.12)";
+    c.fillRect(x0 + 18, y0 + 72, w - 36, 2);
+
+    // Sorting: Strictly prioritize live stream donors (coins / gifts sent)
+    const entries = [...this.leaderboard.values()].sort((a, b) => {
+      const aDonor = a.coins > 0 || (a.gifts ?? 0) > 0;
+      const bDonor = b.coins > 0 || (b.gifts ?? 0) > 0;
+      if (aDonor !== bDonor) return bDonor ? 1 : -1;
+      if (b.coins !== a.coins) return b.coins - a.coins;
+      if (b.blocks !== a.blocks) return b.blocks - a.blocks;
+      return b.tnt - a.tnt;
+    });
+
+    const donors = entries.filter((e) => e.coins > 0 || (e.gifts ?? 0) > 0);
+    const displayList = donors.length > 0 ? donors : entries;
+    const topEntries = displayList.slice(0, 4);
+
+    if (topEntries.length === 0) {
+      // Empty state: Welcoming & encouraging viewers to donate
+      c.save();
+      this.text("🎁", x0 + w / 2, y0 + 160, 46, "#fff", "center", 0);
+      this.text("MAG-DONATE NG GIFTS", x0 + w / 2, y0 + 224, 24, "#ffd76a", "center", 6);
+      this.text("Para maging TOP 1 Destroyer!", x0 + w / 2, y0 + 260, 18, "#ffffff", "center", 0);
+      this.text("Bawat gift ay may katumbas na TNT", x0 + w / 2, y0 + 290, 15, "#94a3b8", "center", 0);
+      c.restore();
       return;
     }
 
-    entries.forEach((e, i) => {
-      const y = y0 + 72 + i * 40;
-      const medal = RANK_COLORS[i] ?? "#64748b";
+    const rowH = 76;
+    const startY = y0 + 84;
+
+    topEntries.forEach((e, i) => {
+      const rowY = startY + i * rowH;
+      const cy = rowY + rowH / 2;
+
+      // Row Glass Pill Background
+      c.save();
+      if (i === 0) {
+        // Rank 1: Golden glow highlight
+        c.fillStyle = "rgba(245, 197, 66, 0.15)";
+        c.strokeStyle = "rgba(245, 197, 66, 0.5)";
+        c.lineWidth = 1.5;
+        c.beginPath();
+        c.roundRect(x0 + 12, rowY + 3, w - 24, rowH - 6, 18);
+        c.fill();
+        c.stroke();
+      } else if (i === 1) {
+        // Rank 2: Silver tint
+        c.fillStyle = "rgba(226, 232, 240, 0.09)";
+        c.strokeStyle = "rgba(226, 232, 240, 0.28)";
+        c.lineWidth = 1;
+        c.beginPath();
+        c.roundRect(x0 + 12, rowY + 3, w - 24, rowH - 6, 18);
+        c.fill();
+        c.stroke();
+      } else {
+        // Rank 3+: Clean dark row
+        c.fillStyle = "rgba(255, 255, 255, 0.05)";
+        c.beginPath();
+        c.roundRect(x0 + 12, rowY + 3, w - 24, rowH - 6, 18);
+        c.fill();
+      }
+      c.restore();
+
+      // Rank Medal Badge
+      const medalColors = ["#f5c542", "#cbd5e1", "#cd7f32", "#64748b"];
+      const medal = medalColors[i] ?? "#475569";
+      const mx = x0 + 34;
       c.fillStyle = medal;
       c.beginPath();
-      c.arc(x0 + 26, y, 14, 0, Math.PI * 2);
+      c.arc(mx, cy, 16, 0, Math.PI * 2);
       c.fill();
-      this.text(`${i + 1}`, x0 + 26, y + 1, 18, i < 3 ? "#1f2937" : "#ffffff", "center", 0);
-      this.drawAvatar(e.avatarUrl, e.nickname, x0 + 64, y, 15);
-      this.text(truncate(e.nickname, 10), x0 + 88, y + 1, 20, "#ffffff", "left", 0);
-      this.text(`${e.blocks}`, x0 + w - 18, y + 1, 20, "#ff8a65", "right", 0);
+      this.text(`${i + 1}`, mx, cy + 1, 19, i < 3 ? "#0f172a" : "#ffffff", "center", 0);
+
+      // Large Avatar with Rank Ring
+      const ax = x0 + 82;
+      this.drawAvatar(e.avatarUrl, e.nickname, ax, cy, 24);
+      if (i < 3) {
+        c.strokeStyle = medal;
+        c.lineWidth = i === 0 ? 3 : 2;
+        c.beginPath();
+        c.arc(ax, cy, 24, 0, Math.PI * 2);
+        c.stroke();
+      }
+
+      // Nickname
+      const textX = x0 + 118;
+      this.text(truncate(e.nickname, 10), textX, cy - 10, 22, "#ffffff", "left", 6);
+
+      // Donation Info (Coins / Gifts)
+      if (e.coins > 0) {
+        this.text(`🪙 ${e.coins.toLocaleString()} coins`, textX, cy + 14, 16, "#fde047", "left", 0);
+      } else if (e.gifts && e.gifts > 0) {
+        this.text(`🎁 ${e.gifts} gifts`, textX, cy + 14, 16, "#f472b6", "left", 0);
+      } else {
+        this.text(`🧨 ${e.tnt} TNT`, textX, cy + 14, 16, "#fdba74", "left", 0);
+      }
+
+      // Destruction Score (Right side)
+      const rightX = x0 + w - 22;
+      this.text(`${e.blocks}`, rightX, cy - 8, 28, "#ff8a65", "right", 8);
+      this.text("BLOCKS", rightX, cy + 14, 13, "#fdba74", "right", 0);
     });
   }
 

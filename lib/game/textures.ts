@@ -15,6 +15,16 @@ export const BLOCK_PARTICLE_COLORS: Record<BlockType, string[]> = {
   gold: ["#fad73c", "#ffe98a", "#c89614", "#f5c518"],
   diamond: ["#50dcdc", "#b4fffa", "#1e96a0", "#7af0ea"],
   aqua: ["#62dfe3", "#a6f4f4", "#3cbcc4", "#e2ffff"],
+  kuromi_regular: ["#261d31", "#3e2e4f", "#c59ed6", "#f580b3"],
+  dark_jester: ["#2d1e38", "#6a4382", "#c59ed6", "#f580b3"],
+  lucky_skull_box: ["#241530", "#3d1f52", "#ff3399", "#150d1e"],
+  punk_ore: ["#2b2235", "#4a355f", "#ff459e", "#ffffff"],
+  spiked_castle: ["#1c1722", "#3a2d48", "#b870ad", "#f580b3"],
+  space_suit: ["#ffffff", "#2e4057", "#f39c12", "#0f1b29"],
+  shuttle_hull: ["#bdc3c7", "#7f8c8d", "#e67e22", "#2c3e50"],
+  meteor_ore: ["#1e272e", "#00d2d3", "#ffdd59", "#485460"],
+  cargo_crate: ["#d2dae2", "#e67e22", "#f1c40f", "#2f3542"],
+  control_panel: ["#00d2d3", "#10ac84", "#2e86de", "#222f3e"],
 };
 
 function mulberry32(seed: number) {
@@ -266,6 +276,124 @@ export function createTextures(): TextureSet {
       0.18,
     ),
     aqua: smoothAqua(),
+    kuromi_regular: paint(
+      12,
+      (x, y, r) => {
+        // Deep purple base with skull/collar motif
+        if (y < 4 && (x + y) % 3 === 0) return [197, 158, 214]; // lilac scalloped trim
+        if (x >= 5 && x <= 10 && y >= 6 && y <= 11) {
+          if ((x === 6 || x === 9) && y === 8) return [30, 20, 38]; // eyes
+          return [245, 128, 179]; // pink skull
+        }
+        return shade([38, 29, 49], 0.9 + r() * 0.2);
+      },
+      0.15,
+    ),
+    dark_jester: paint(
+      13,
+      (x, y, r) => {
+        // Harlequin diamond check
+        const isLight = (Math.floor(x / 4) + Math.floor(y / 4)) % 2 === 0;
+        const base: RGB = isLight ? [109, 78, 131] : [41, 30, 52];
+        if (x >= 6 && x <= 9 && y >= 6 && y <= 9) return [245, 128, 179]; // small pink skull center
+        return shade(base, 0.93 + r() * 0.14);
+      },
+      0.12,
+    ),
+    lucky_skull_box: paint(
+      14,
+      (x, y, r) => {
+        // Dark purple wooden crate with bright pink skull
+        const isBorder = x <= 1 || x >= 14 || y <= 1 || y >= 14;
+        if (isBorder) return [24, 18, 31];
+        if (x >= 5 && x <= 10 && y >= 5 && y <= 11) return [255, 51, 153]; // neon pink skull
+        const plank = (y % 4 === 0) ? [28, 18, 38] : [48, 28, 65];
+        return shade(plank as RGB, 0.93 + r() * 0.14);
+      },
+      0.15,
+    ),
+    punk_ore: paint(
+      15,
+      (x, y, r) => {
+        // Dark purple ore stone with glowing pink crystals
+        const isGem = ((x * 5 + y * 7) % 11 === 0 && r() < 0.45) || (x === 7 && y === 8) || (x === 11 && y === 4);
+        if (isGem) {
+          if (r() < 0.2) return [255, 255, 255]; // sparkle
+          return r() < 0.5 ? [255, 69, 158] : [255, 138, 198];
+        }
+        return shade([43, 34, 53], 0.9 + r() * 0.2);
+      },
+      0.15,
+    ),
+    spiked_castle: paint(
+      16,
+      (x, y, r) => {
+        // Obsidian brick with lavender battlement top
+        if (y <= 2) return [197, 158, 214]; // lavender battlements
+        const isMortar = y % 4 === 0 || (y < 8 && x % 8 === 0) || (y >= 8 && (x + 4) % 8 === 0);
+        if (isMortar) return [20, 15, 25];
+        if (x <= 1 || x >= 14) return [70, 45, 78]; // corner bracket
+        return shade([32, 26, 40], 0.92 + r() * 0.16);
+      },
+      0.15,
+    ),
+    space_suit: paint(
+      17,
+      (x, y, r) => {
+        // Space helmet visor & white suit
+        if (x >= 4 && x <= 11 && y >= 4 && y <= 11) {
+          if (x === 5 && y === 5) return [255, 255, 255]; // visor glare
+          return [15, 25, 45]; // starry dark visor
+        }
+        if (x <= 1 || x >= 14 || y <= 1 || y >= 14) return [240, 150, 40]; // orange border
+        return shade([230, 235, 245], 0.9 + r() * 0.18);
+      },
+      0.15,
+    ),
+    shuttle_hull: paint(
+      18,
+      (x, y, r) => {
+        // Metal hull plates with hazard stripe
+        if ((x + y) % 6 < 3 && (y <= 3 || y >= 12)) return [235, 140, 20]; // hazard stripes
+        if (x === 7 || y === 7) return [50, 55, 65]; // panel seam
+        return shade([180, 190, 200], 0.9 + r() * 0.15);
+      },
+      0.14,
+    ),
+    meteor_ore: paint(
+      19,
+      (x, y, r) => {
+        // Deep space asteroid with glowing cyan & gold celestial ore
+        const isCyan = (x * 3 + y * 7) % 9 === 0;
+        const isGold = (x * 5 + y * 2) % 11 === 0;
+        if (isCyan) return [0, 210, 220];
+        if (isGold) return [255, 200, 50];
+        return shade([35, 40, 50], 0.88 + r() * 0.22);
+      },
+      0.18,
+    ),
+    cargo_crate: paint(
+      20,
+      (x, y, r) => {
+        // Sci-fi cargo crate with orange corner bumpers
+        const isCorner = (x <= 2 || x >= 13) && (y <= 2 || y >= 13);
+        if (isCorner) return [240, 120, 20];
+        if (x >= 4 && x <= 7 && y >= 5 && y <= 10) return [255, 215, 60]; // keypad
+        return shade([195, 205, 215], 0.92 + r() * 0.14);
+      },
+      0.15,
+    ),
+    control_panel: paint(
+      21,
+      (x, y, r) => {
+        // Telemetry console with glowing radar & cyan waveforms
+        if (y === 8 && x >= 3 && x <= 12) return [0, 230, 240]; // waveform line
+        if ((x - 8) * (x - 8) + (y - 8) * (y - 8) <= 9 && (x + y) % 2 === 0) return [20, 180, 150]; // radar blip
+        if (x <= 1 || x >= 14 || y <= 1 || y >= 14) return [40, 70, 95];
+        return shade([25, 35, 45], 0.9 + r() * 0.2);
+      },
+      0.15,
+    ),
     glass: paintRGBA(glassPixel),
     bedrock: paint(6, (_x, _y, r) => pick(r, BEDROCK), 0),
     empty: paint(7, (_x, _y, r) => shade(pick(r, STONE), 0.28), 0.25),
